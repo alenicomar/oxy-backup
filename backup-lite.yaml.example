@@ -1,0 +1,63 @@
+# backup-lite configuration example
+# ===================================
+# Environment variables are interpolated using ${VAR_NAME} syntax.
+
+version: "1"
+
+# Defaults are merged into each database config where fields are zero-valued.
+# Database-level values always override defaults.
+defaults:
+  mode: docker                    # "docker" or "host"
+  container: my-postgres          # container name (docker mode)
+  # host: localhost               # hostname (host mode)
+  port: 5432
+  username: postgres
+  password: "${PGPASSWORD}"       # env var interpolation
+  partition_size: "1MB"           # supports KB, MB, GB or plain bytes
+  output_dir: "./backups"
+  pg_dump_args:
+    - "--no-owner"
+    - "--no-acl"
+
+# Git settings for committing backups.
+git:
+  auto_push: true
+  remote: origin
+  branch: main
+  commit_message_template: "backup: {{.DbName}} @ {{.Timestamp}}"
+
+# Logging configuration.
+logging:
+  level: info                     # debug, info, warn, error
+  format: text                    # text or json
+
+# Databases to back up.
+databases:
+  # Docker mode example: connects to pg_dump/psql inside a container.
+  - name: app_production
+    mode: docker
+    container: postgres-prod
+    database: app_db
+    username: app_user
+    password: "${APP_DB_PASSWORD}"
+    partition_size: "5MB"
+    output_dir: "./backups"
+    pg_dump_args:
+      - "--no-owner"
+      - "--no-acl"
+      - "--exclude-table=sessions"
+
+  # Host mode example: connects to pg_dump/psql on the host network.
+  - name: analytics
+    mode: host
+    host: db.example.com
+    port: 5432
+    database: analytics_db
+    username: analytics
+    password: "${ANALYTICS_DB_PASSWORD}"
+    partition_size: "10MB"
+    output_dir: "./backups"
+
+  # Minimal example: inherits everything from defaults.
+  - name: staging
+    database: staging_db
