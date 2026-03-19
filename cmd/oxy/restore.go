@@ -66,12 +66,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 
 	pgExec := &postgres.ExecPgExecutor{Logger: logger}
-	gitClient := &git.ExecGitClient{
-		WorkDir: ".",
-		Remote:  cfg.Git.Remote,
-		Branch:  cfg.Git.Branch,
-		Logger:  logger,
-	}
+	gitClient := git.NewClient(cfg.Git, ".", logger)
 
 	svc := &restore.Service{
 		PgExecutor: pgExec,

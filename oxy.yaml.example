@@ -26,6 +26,13 @@ git:
   branch: main
   commit_message_template: "backup: {{.DbName}} @ {{.Timestamp}}"
 
+  # SSH authentication for private repos.
+  # When ssh_key_path is set, oxy uses go-git with native SSH transport
+  # instead of shelling out to the git CLI.
+  # ssh_key_path: "${SSH_KEY_PATH}"           # path to private key (e.g. ~/.ssh/id_ed25519)
+  # ssh_key_pass_env: "SSH_KEY_PASSPHRASE"    # env var holding key passphrase (if encrypted)
+  # ssh_known_hosts_path: "~/.ssh/known_hosts" # defaults to ~/.ssh/known_hosts
+
 # Logging configuration.
 logging:
   level: info                     # debug, info, warn, error

@@ -5,6 +5,8 @@ package config
 import (
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -39,6 +41,11 @@ type GitConfig struct {
 	CommitMessageTemplate string `yaml:"commit_message_template,omitempty"`
 	Remote                string `yaml:"remote,omitempty"`
 	Branch                string `yaml:"branch,omitempty"`
+
+	// SSH authentication for private repos (enables go-git adapter).
+	SSHKeyPath        string `yaml:"ssh_key_path,omitempty"`         // path to private key, e.g. "~/.ssh/id_ed25519"
+	SSHKeyPassEnv     string `yaml:"ssh_key_pass_env,omitempty"`     // env var holding key passphrase (if encrypted)
+	SSHKnownHostsPath string `yaml:"ssh_known_hosts_path,omitempty"` // path to known_hosts file (default: ~/.ssh/known_hosts)
 }
 
 // AutoPushEnabled returns true if auto_push is nil (default) or explicitly true.
@@ -92,6 +99,11 @@ func (c *Config) Validate(logger *slog.Logger) error {
 			logger.Warn("password is empty after env var interpolation",
 				"database", db.Name, "index", i)
 		}
+	}
+
+	// Validate SSH config
+	if err := c.Git.validateSSH(); err != nil {
+		return err
 	}
 
 	return nil
@@ -199,4 +211,58 @@ func ParseSize(s string) (int64, error) {
 // PartitionSizeBytes returns the partition size in bytes for a database config.
 func (d *DatabaseConfig) PartitionSizeBytes() (int64, error) {
 	return ParseSize(d.PartitionSize)
+}
+
+// SSHEnabled returns true if SSH key authentication is configured.
+func (g *GitConfig) SSHEnabled() bool {
+	return g.SSHKeyPath != ""
+}
+
+// validateSSH checks SSH-related config consistency.
+func (g *GitConfig) validateSSH() error {
+	if g.SSHKeyPassEnv != "" && g.SSHKeyPath == "" {
+		return fmt.Errorf("config validation: git.ssh_key_pass_env requires git.ssh_key_path")
+	}
+	if g.SSHKnownHostsPath != "" && g.SSHKeyPath == "" {
+		return fmt.Errorf("config validation: git.ssh_known_hosts_path requires git.ssh_key_path")
+	}
+
+	if g.SSHKeyPath != "" {
+		expanded := ExpandHome(g.SSHKeyPath)
+		if _, err := os.Stat(expanded); err != nil {
+			return fmt.Errorf("config validation: git.ssh_key_path %q not found: %w", g.SSHKeyPath, err)
+		}
+	}
+
+	return nil
+}
+
+// ResolvedSSHKeyPath returns the SSH key path with ~ expanded.
+func (g *GitConfig) ResolvedSSHKeyPath() string {
+	return ExpandHome(g.SSHKeyPath)
+}
+
+// ResolvedSSHKnownHostsPath returns the known_hosts path with ~ expanded,
+// defaulting to ~/.ssh/known_hosts.
+func (g *GitConfig) ResolvedSSHKnownHostsPath() string {
+	if g.SSHKnownHostsPath != "" {
+		return ExpandHome(g.SSHKnownHostsPath)
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".ssh", "known_hosts")
+}
+
+// ExpandHome replaces a leading ~ with the current user's home directory.
+func ExpandHome(path string) string {
+	if !strings.HasPrefix(path, "~") {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, path[1:])
 }
