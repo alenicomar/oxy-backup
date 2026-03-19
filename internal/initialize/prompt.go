@@ -24,6 +24,9 @@ func NewPrompter(r io.Reader, w io.Writer) *Prompter {
 	}
 }
 
+// errEOF is returned when the input reader is exhausted.
+var errEOF = fmt.Errorf("unexpected end of input")
+
 // ask prints a prompt with optional default and reads a line.
 func (p *Prompter) ask(label, defaultVal string) string {
 	if defaultVal != "" {
@@ -31,7 +34,9 @@ func (p *Prompter) ask(label, defaultVal string) string {
 	} else {
 		fmt.Fprintf(p.out, "%s: ", label)
 	}
-	p.scanner.Scan()
+	if !p.scanner.Scan() {
+		return defaultVal
+	}
 	val := strings.TrimSpace(p.scanner.Text())
 	if val == "" {
 		return defaultVal
@@ -40,13 +45,16 @@ func (p *Prompter) ask(label, defaultVal string) string {
 }
 
 // askRequired prints a prompt and keeps asking until non-empty input.
-func (p *Prompter) askRequired(label string) string {
+// Returns an error if input is exhausted before a value is provided.
+func (p *Prompter) askRequired(label string) (string, error) {
 	for {
 		fmt.Fprintf(p.out, "%s: ", label)
-		p.scanner.Scan()
+		if !p.scanner.Scan() {
+			return "", errEOF
+		}
 		val := strings.TrimSpace(p.scanner.Text())
 		if val != "" {
-			return val
+			return val, nil
 		}
 		fmt.Fprintln(p.out, "  This field is required.")
 	}
@@ -54,24 +62,27 @@ func (p *Prompter) askRequired(label string) string {
 
 // selectOne presents a numbered choice and returns the selected option string.
 // Re-prompts on invalid input; empty input accepts the default.
-func (p *Prompter) selectOne(label string, options []string, defaultIdx int) string {
+// Returns an error if input is exhausted.
+func (p *Prompter) selectOne(label string, options []string, defaultIdx int) (string, error) {
 	for {
 		fmt.Fprintln(p.out, label)
 		for i, opt := range options {
 			fmt.Fprintf(p.out, "  [%d] %s\n", i+1, opt)
 		}
 		fmt.Fprintf(p.out, "Choice [%d]: ", defaultIdx+1)
-		p.scanner.Scan()
+		if !p.scanner.Scan() {
+			return options[defaultIdx], errEOF
+		}
 		val := strings.TrimSpace(p.scanner.Text())
 		if val == "" {
-			return options[defaultIdx]
+			return options[defaultIdx], nil
 		}
 		n, err := strconv.Atoi(val)
 		if err != nil || n < 1 || n > len(options) {
 			fmt.Fprintf(p.out, "  Invalid choice. Please enter 1-%d.\n", len(options))
 			continue
 		}
-		return options[n-1]
+		return options[n-1], nil
 	}
 }
 
@@ -90,14 +101,21 @@ func (p *Prompter) RunInteractive() (*InitOptions, error) {
 	fmt.Fprintln(p.out, "")
 
 	// 2. Database mode
-	opts.Mode = p.selectOne("Database mode:", []string{"docker", "host"}, 0)
+	var err error
+	opts.Mode, err = p.selectOne("Database mode:", []string{"docker", "host"}, 0)
+	if err != nil {
+		return nil, err
+	}
 
 	fmt.Fprintln(p.out, "")
 
 	// 3. Mode-specific fields
 	switch opts.Mode {
 	case "docker":
-		opts.Container = p.askRequired("Docker container name")
+		opts.Container, err = p.askRequired("Docker container name")
+		if err != nil {
+			return nil, err
+		}
 	case "host":
 		opts.Host = p.ask("PostgreSQL host", "localhost")
 		portStr := p.ask("PostgreSQL port", "5432")
@@ -112,7 +130,10 @@ func (p *Prompter) RunInteractive() (*InitOptions, error) {
 	fmt.Fprintln(p.out, "")
 
 	// 4. Database info
-	opts.DbName = p.askRequired("Database name (logical label)")
+	opts.DbName, err = p.askRequired("Database name (logical label)")
+	if err != nil {
+		return nil, err
+	}
 	opts.DbDatabase = p.ask("PostgreSQL database name", opts.DbName)
 	opts.PasswordEnv = p.ask("Password env var name", "PGPASSWORD")
 

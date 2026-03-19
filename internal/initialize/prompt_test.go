@@ -33,12 +33,27 @@ func TestPrompter_Ask_WithInput(t *testing.T) {
 	}
 }
 
+func TestPrompter_Ask_EOF_ReturnsDefault(t *testing.T) {
+	in := strings.NewReader("") // empty — EOF immediately
+	out := &bytes.Buffer{}
+	p := NewPrompter(in, out)
+
+	got := p.ask("Enter name", "fallback")
+
+	if got != "fallback" {
+		t.Errorf("ask() on EOF = %q, want default %q", got, "fallback")
+	}
+}
+
 func TestPrompter_AskRequired_RetriesOnEmpty(t *testing.T) {
 	in := strings.NewReader("\nvalue\n")
 	out := &bytes.Buffer{}
 	p := NewPrompter(in, out)
 
-	got := p.askRequired("Enter field")
+	got, err := p.askRequired("Enter field")
+	if err != nil {
+		t.Fatalf("askRequired() error: %v", err)
+	}
 
 	if got != "value" {
 		t.Errorf("askRequired() = %q, want %q", got, "value")
@@ -48,12 +63,29 @@ func TestPrompter_AskRequired_RetriesOnEmpty(t *testing.T) {
 	}
 }
 
+func TestPrompter_AskRequired_EOF_ReturnsError(t *testing.T) {
+	in := strings.NewReader("") // EOF immediately
+	out := &bytes.Buffer{}
+	p := NewPrompter(in, out)
+
+	_, err := p.askRequired("Enter field")
+	if err == nil {
+		t.Fatal("askRequired() on EOF should return error")
+	}
+	if err != errEOF {
+		t.Errorf("askRequired() error = %v, want errEOF", err)
+	}
+}
+
 func TestPrompter_SelectOne_Default(t *testing.T) {
 	in := strings.NewReader("\n")
 	out := &bytes.Buffer{}
 	p := NewPrompter(in, out)
 
-	got := p.selectOne("Pick one:", []string{"alpha", "beta", "gamma"}, 0)
+	got, err := p.selectOne("Pick one:", []string{"alpha", "beta", "gamma"}, 0)
+	if err != nil {
+		t.Fatalf("selectOne() error: %v", err)
+	}
 
 	if got != "alpha" {
 		t.Errorf("selectOne() = %q, want %q", got, "alpha")
@@ -65,7 +97,10 @@ func TestPrompter_SelectOne_ValidChoice(t *testing.T) {
 	out := &bytes.Buffer{}
 	p := NewPrompter(in, out)
 
-	got := p.selectOne("Pick one:", []string{"alpha", "beta", "gamma"}, 0)
+	got, err := p.selectOne("Pick one:", []string{"alpha", "beta", "gamma"}, 0)
+	if err != nil {
+		t.Fatalf("selectOne() error: %v", err)
+	}
 
 	if got != "beta" {
 		t.Errorf("selectOne() = %q, want %q", got, "beta")
@@ -78,13 +113,31 @@ func TestPrompter_SelectOne_InvalidChoice(t *testing.T) {
 	out := &bytes.Buffer{}
 	p := NewPrompter(in, out)
 
-	got := p.selectOne("Pick one:", []string{"alpha", "beta", "gamma"}, 0)
+	got, err := p.selectOne("Pick one:", []string{"alpha", "beta", "gamma"}, 0)
+	if err != nil {
+		t.Fatalf("selectOne() error: %v", err)
+	}
 
 	if got != "alpha" {
 		t.Errorf("selectOne() = %q, want default %q for invalid input", got, "alpha")
 	}
 	if !strings.Contains(out.String(), "Invalid choice") {
 		t.Error("expected 'Invalid choice' message in output")
+	}
+}
+
+func TestPrompter_SelectOne_EOF_ReturnsDefault(t *testing.T) {
+	in := strings.NewReader("") // EOF
+	out := &bytes.Buffer{}
+	p := NewPrompter(in, out)
+
+	got, err := p.selectOne("Pick one:", []string{"alpha", "beta"}, 1)
+	if err == nil {
+		t.Fatal("selectOne() on EOF should return error")
+	}
+	// Even on error, it should return the default value
+	if got != "beta" {
+		t.Errorf("selectOne() on EOF = %q, want default %q", got, "beta")
 	}
 }
 
