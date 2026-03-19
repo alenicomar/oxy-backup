@@ -74,6 +74,18 @@ func (g *ExecGitClient) Restore(ctx context.Context, paths ...string) error {
 	return err
 }
 
+// Init initializes a new git repository in the working directory.
+func (g *ExecGitClient) Init(ctx context.Context) error {
+	_, err := g.run(ctx, "init")
+	return err
+}
+
+// RemoteAdd adds a named remote with the given URL.
+func (g *ExecGitClient) RemoteAdd(ctx context.Context, name, url string) error {
+	_, err := g.run(ctx, "remote", "add", name, url)
+	return err
+}
+
 func (g *ExecGitClient) run(ctx context.Context, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = g.WorkDir

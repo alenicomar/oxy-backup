@@ -21,4 +21,10 @@ type GitClient interface {
 
 	// Restore recovers files from Git index (git restore).
 	Restore(ctx context.Context, paths ...string) error
+
+	// Init initializes a new git repository in the working directory.
+	Init(ctx context.Context) error
+
+	// RemoteAdd adds a named remote with the given URL.
+	RemoteAdd(ctx context.Context, name, url string) error
 }

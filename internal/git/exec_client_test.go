@@ -268,3 +268,104 @@ func TestContextCancellation(t *testing.T) {
 		t.Fatal("expected error with cancelled context, got nil")
 	}
 }
+
+func TestExecGitClient_Init(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	client := &ExecGitClient{
+		WorkDir: dir,
+		Logger:  slog.Default(),
+	}
+
+	err := client.Init(context.Background())
+	if err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Verify .git directory exists
+	if _, err := os.Stat(filepath.Join(dir, ".git")); os.IsNotExist(err) {
+		t.Fatal(".git directory not created")
+	}
+
+	// Verify ValidateRepo now succeeds
+	err = client.ValidateRepo(context.Background())
+	if err != nil {
+		t.Fatalf("ValidateRepo after Init failed: %v", err)
+	}
+}
+
+func TestExecGitClient_Init_Idempotent(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	client := &ExecGitClient{
+		WorkDir: dir,
+		Logger:  slog.Default(),
+	}
+
+	// Init twice
+	if err := client.Init(context.Background()); err != nil {
+		t.Fatalf("first Init failed: %v", err)
+	}
+	if err := client.Init(context.Background()); err != nil {
+		t.Fatalf("second Init (idempotent) failed: %v", err)
+	}
+}
+
+func TestExecGitClient_RemoteAdd(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	client := &ExecGitClient{
+		WorkDir: dir,
+		Logger:  slog.Default(),
+	}
+
+	// Init first
+	if err := client.Init(context.Background()); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Add remote
+	err := client.RemoteAdd(context.Background(), "origin", "https://github.com/test/repo.git")
+	if err != nil {
+		t.Fatalf("RemoteAdd failed: %v", err)
+	}
+
+	// Verify remote was added by running git remote -v
+	cmd := exec.CommandContext(context.Background(), "git", "remote", "-v")
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git remote -v failed: %v", err)
+	}
+	if !strings.Contains(string(output), "https://github.com/test/repo.git") {
+		t.Fatalf("remote not found in output: %s", string(output))
+	}
+}
+
+func TestExecGitClient_RemoteAdd_AlreadyExists(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	client := &ExecGitClient{
+		WorkDir: dir,
+		Logger:  slog.Default(),
+	}
+
+	if err := client.Init(context.Background()); err != nil {
+		t.Fatalf("Init failed: %v", err)
+	}
+
+	// Add remote first time
+	if err := client.RemoteAdd(context.Background(), "origin", "https://github.com/test/repo.git"); err != nil {
+		t.Fatalf("first RemoteAdd failed: %v", err)
+	}
+
+	// Add same remote again should fail
+	err := client.RemoteAdd(context.Background(), "origin", "https://github.com/test/other.git")
+	if err == nil {
+		t.Fatal("expected error when adding duplicate remote, got nil")
+	}
+}
