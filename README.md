@@ -14,21 +14,28 @@ The tool works with PostgreSQL running in Docker containers or directly on the h
 
 - **Dump and partition** -- runs `pg_dump` and splits the output into configurable chunks (KB, MB, GB)
 - **Git-backed versioning** -- each backup is committed with a timestamped message and optionally pushed to a remote
+- **SSH key authentication** -- native SSH transport via `go-git/v5` for private repos. Configure an SSH key and oxy handles auth without shelling out to git
 - **Point-in-time restore** -- reassembles partitions from any backup timestamp and loads via `psql --single-transaction`
 - **Multi-database support** -- configure and back up multiple databases sequentially, with per-database overrides
 - **Defaults merging** -- define shared settings once under `defaults:`, override at the database level
 - **Docker and host modes** -- connect to PostgreSQL via `docker exec` or direct host/port
 - **Environment variable interpolation** -- use `${VAR_NAME}` syntax in config to avoid hardcoding credentials
-- **Interactive setup wizard** -- `oxy init --interactive` guides you through first-time configuration
+- **Interactive setup wizard** -- `oxy init --interactive` guides you through first-time configuration, including SSH key detection for private repos
 - **Dry-run mode** -- validate config and preview actions without executing anything
 - **Structured exit codes** -- distinct codes for config, dump, partition, git, restore, and partial failure errors (CI-friendly)
 - **JSON and text logging** -- configurable via flags or config file
+- **Hexagonal architecture** -- GitClient port with two adapters (ExecGitClient, GoGitClient), clean separation of concerns across packages
 
 ## Quick Start
 
 ```bash
 # Initialize a new backup repository
 oxy init --db-mode=docker --db-container=my-postgres --db-name=myapp
+
+# Or with a private SSH remote
+oxy init --db-mode=docker --db-container=my-postgres --db-name=myapp \
+  --git-remote git@github.com:you/backups.git \
+  --ssh-key ~/.ssh/id_ed25519
 
 # Set the database password
 export PGPASSWORD="your-password"
@@ -70,7 +77,7 @@ docker build -t oxy-backup .
 docker run --rm -v $(pwd):/data oxy-backup backup --config oxy.yaml
 ```
 
-The Docker image is a multi-stage build based on `alpine:3.21` and includes `postgresql-client`, `git`, and the `oxy` binary. It runs as a non-root user.
+The Docker image is a multi-stage build based on `alpine:3.21` and includes `postgresql-client`, `git`, `openssh-client`, and the `oxy` binary. It runs as a non-root user.
 
 ## Configuration
 
@@ -100,6 +107,13 @@ git:
   remote: origin
   branch: main
   commit_message_template: "backup: {{.DbName}} @ {{.Timestamp}}"
+
+  # SSH authentication for private repos (optional).
+  # When ssh_key_path is set, oxy uses go-git with native SSH transport
+  # instead of shelling out to the system git binary.
+  # ssh_key_path: "~/.ssh/id_ed25519"
+  # ssh_key_pass_env: "SSH_KEY_PASSPHRASE"    # env var holding key passphrase
+  # ssh_known_hosts_path: "~/.ssh/known_hosts"
 
 # Logging
 logging:
@@ -139,7 +153,8 @@ databases:
 | Section | Purpose |
 |---|---|
 | `defaults` | Shared database settings. Per-database values override these. |
-| `git` | Remote, branch, auto-push behavior, and commit message template. `auto_push` defaults to `true`. |
+| `git` | Remote, branch, auto-push behavior, commit message template, and SSH key settings. `auto_push` defaults to `true`. |
+| `git.ssh_*` | SSH key authentication. When `ssh_key_path` is set, oxy uses `go-git` with native SSH transport instead of shelling out to the system `git` binary. |
 | `logging` | Log level (`debug`, `info`, `warn`, `error`) and format (`text`, `json`). |
 | `databases` | List of databases to back up. Each requires `name` and `database` at minimum. |
 
@@ -181,12 +196,25 @@ oxy init --db-mode=docker --db-container=my-postgres --db-name=myapp
 oxy init --db-mode=host --db-host=db.example.com --db-port=5432 \
   --db-username=postgres --db-name=myapp
 
+# With a private SSH remote
+oxy init --db-mode=docker --db-container=pg --db-name=app \
+  --git-remote git@github.com:you/backups.git \
+  --ssh-key ~/.ssh/id_ed25519
+
+# SSH remote with encrypted key
+oxy init --db-mode=docker --db-container=pg --db-name=app \
+  --git-remote git@github.com:you/backups.git \
+  --ssh-key ~/.ssh/id_ed25519 \
+  --ssh-key-pass-env SSH_KEY_PASSPHRASE
+
 # Initialize in a specific directory
 oxy init ./my-backups --db-mode=docker --db-container=pg --db-name=app
 
 # Overwrite existing config
 oxy init --force --db-mode=docker --db-container=pg --db-name=app
 ```
+
+In interactive mode, the wizard automatically detects SSH remote URLs and prompts for the SSH key path, passphrase environment variable, and known_hosts file.
 
 **Flags:**
 
@@ -204,6 +232,9 @@ oxy init --force --db-mode=docker --db-container=pg --db-name=app
 | `--password-env` | `PGPASSWORD` | Environment variable for the database password |
 | `--partition-size` | `100KB` | Backup partition size |
 | `--output-dir` | `./backups` | Output directory for backup files |
+| `--ssh-key` | | Path to SSH private key (enables go-git SSH transport) |
+| `--ssh-key-pass-env` | | Env var holding SSH key passphrase (if key is encrypted) |
+| `--ssh-known-hosts` | `~/.ssh/known_hosts` | Path to known_hosts file |
 | `-f`, `--force` | `false` | Overwrite existing `oxy.yaml` |
 
 ### `oxy backup`
@@ -251,18 +282,29 @@ The restore process validates the manifest, reassembles partitions into a single
 
 ## Architecture
 
+The project follows a hexagonal (ports & adapters) architecture. Core logic depends on interfaces (ports), with concrete implementations (adapters) injected at runtime.
+
 ```
 cmd/oxy/              CLI entry point (cobra commands)
 internal/
   backup/             Dump orchestration, partitioning, and manifest generation
   restore/            Partition reassembly and database loading
   config/             YAML loading, env var interpolation, validation, defaults merging
-  git/                Port (interface) and adapter for Git operations
+  git/                GitClient port + adapters:
+                        - ExecGitClient (default, shells out to system git)
+                        - GoGitClient (native SSH transport via go-git/v5)
+                        - Factory selects adapter based on config
   postgres/           Port (interface) and adapter for pg_dump/psql execution
-  initialize/         Init subcommand: interactive prompts, config generation, prereq checks
+  initialize/         Init subcommand: interactive prompts, SSH detection, config generation
   logging/            slog handler configuration (text/json)
   exitcode/           Process exit codes for CI integration
 ```
+
+### Git client selection
+
+When `git.ssh_key_path` is configured in `oxy.yaml`, the factory creates a `GoGitClient` that uses `go-git/v5` with native SSH transport. This avoids requiring the system `git` binary to have SSH key access configured.
+
+When no SSH key is set, the factory creates an `ExecGitClient` that shells out to the system `git` binary for all operations.
 
 ### Exit codes
 
@@ -300,10 +342,13 @@ make help         # Show available targets
 
 ### Dependencies
 
-The project has minimal dependencies:
+The project uses a focused set of dependencies:
 
 - [`github.com/spf13/cobra`](https://github.com/spf13/cobra) -- CLI framework
 - [`gopkg.in/yaml.v3`](https://github.com/go-yaml/yaml) -- YAML parsing
+- [`github.com/go-git/go-git/v5`](https://github.com/go-git/go-git) -- Pure Go git implementation (SSH transport)
+- [`golang.org/x/crypto`](https://pkg.go.dev/golang.org/x/crypto) -- SSH key parsing
+- [`github.com/skeema/knownhosts`](https://github.com/skeema/knownhosts) -- SSH known_hosts verification
 
 ## Docker
 
@@ -313,7 +358,7 @@ The project has minimal dependencies:
 docker build -t oxy-backup .
 ```
 
-The Dockerfile uses a multi-stage build: Go compilation in `golang:1.25-alpine`, then a minimal `alpine:3.21` runtime with `postgresql-client` and `git`. The final image runs as a non-root `oxy` user.
+The Dockerfile uses a multi-stage build: Go compilation in `golang:1.25-alpine`, then a minimal `alpine:3.21` runtime with `postgresql-client`, `git`, `openssh-client`, and `ca-certificates`. The final image runs as a non-root `oxy` user.
 
 ### Run
 
@@ -329,6 +374,14 @@ docker run --rm \
   -v $(pwd):/data \
   -e PGPASSWORD="your-password" \
   oxy-backup backup --config /data/oxy.yaml
+
+# With SSH key for private repos
+docker run --rm \
+  -v $(pwd):/data \
+  -v ~/.ssh/id_ed25519:/home/oxy/.ssh/id_ed25519:ro \
+  -v ~/.ssh/known_hosts:/home/oxy/.ssh/known_hosts:ro \
+  -e PGPASSWORD="your-password" \
+  oxy-backup backup
 ```
 
 The container's working directory is `/data` and the entrypoint is `oxy`.
