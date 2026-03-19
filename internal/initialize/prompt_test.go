@@ -141,18 +141,53 @@ func TestPrompter_SelectOne_EOF_ReturnsDefault(t *testing.T) {
 	}
 }
 
+// --- IsSSHURL ---
+
+func TestIsSSHURL(t *testing.T) {
+	tests := []struct {
+		url  string
+		want bool
+	}{
+		{"git@github.com:user/repo.git", true},
+		{"git@gitlab.com:org/project.git", true},
+		{"ssh://git@github.com/user/repo.git", true},
+		{"ssh://server.com/path", true},
+		{"https://github.com/user/repo.git", false},
+		{"http://github.com/user/repo.git", false},
+		{"", false},
+		{"/local/path", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.url, func(t *testing.T) {
+			got := IsSSHURL(tt.url)
+			if got != tt.want {
+				t.Errorf("IsSSHURL(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- RunInteractive with SSH ---
+
 func TestRunInteractive_DockerMode(t *testing.T) {
-	// Answers in the order the prompts ask:
-	// 1. Git remote URL
-	// 2. Database mode (1 = docker)
-	// 3. Docker container name (required)
-	// 4. Database name (required)
-	// 5. PostgreSQL database name (default = db name)
-	// 6. Password env var name (default = PGPASSWORD)
-	// 7. Partition size (default = 100KB)
-	// 8. Output directory (default = ./backups)
+	// Answers in order:
+	// 1. Git remote URL (SSH — triggers SSH prompts)
+	// 2. SSH private key path (default)
+	// 3. Passphrase-protected? (n)
+	// 4. known_hosts path (empty for default)
+	// 5. Database mode (1 = docker)
+	// 6. Docker container name (required)
+	// 7. Database name (required)
+	// 8. PostgreSQL database name
+	// 9. Password env var name
+	// 10. Partition size
+	// 11. Output directory
 	answers := strings.Join([]string{
-		"git@github.com:user/repo.git", // git remote
+		"git@github.com:user/repo.git", // git remote (SSH)
+		"~/.ssh/id_rsa",                // ssh key path
+		"n",                            // no passphrase
+		"",                             // known_hosts (default)
 		"1",                            // docker
 		"my-postgres-container",        // container name
 		"mydb",                         // database name (label)
@@ -179,6 +214,8 @@ func TestRunInteractive_DockerMode(t *testing.T) {
 	}
 
 	assertField("GitRemote", opts.GitRemote, "git@github.com:user/repo.git")
+	assertField("SSHKeyPath", opts.SSHKeyPath, "~/.ssh/id_rsa")
+	assertField("SSHKeyPassEnv", opts.SSHKeyPassEnv, "")
 	assertField("Mode", opts.Mode, "docker")
 	assertField("Container", opts.Container, "my-postgres-container")
 	assertField("DbName", opts.DbName, "mydb")
@@ -186,22 +223,66 @@ func TestRunInteractive_DockerMode(t *testing.T) {
 	assertField("PasswordEnv", opts.PasswordEnv, "MY_PG_PASS")
 	assertField("PartitionSize", opts.PartitionSize, "2MB")
 	assertField("OutputDir", opts.OutputDir, "./output")
+
+	// Verify SSH section was printed
+	if !strings.Contains(out.String(), "SSH remote detected") {
+		t.Error("output should contain 'SSH remote detected'")
+	}
+}
+
+func TestRunInteractive_DockerMode_SSHWithPassphrase(t *testing.T) {
+	answers := strings.Join([]string{
+		"git@github.com:user/repo.git", // git remote (SSH)
+		"~/.ssh/id_ed25519",            // ssh key path
+		"y",                            // yes passphrase
+		"MY_SSH_PASS",                  // passphrase env var
+		"",                             // known_hosts (default)
+		"1",                            // docker
+		"pg-container",                 // container name
+		"mydb",                         // database name
+		"",                             // postgresql db (default = mydb)
+		"",                             // password env (default PGPASSWORD)
+		"",                             // partition size (default 100KB)
+		"",                             // output dir (default ./backups)
+	}, "\n") + "\n"
+
+	in := strings.NewReader(answers)
+	out := &bytes.Buffer{}
+	p := NewPrompter(in, out)
+
+	opts, err := p.RunInteractive()
+	if err != nil {
+		t.Fatalf("RunInteractive() error: %v", err)
+	}
+
+	if opts.SSHKeyPath != "~/.ssh/id_ed25519" {
+		t.Errorf("SSHKeyPath = %q, want %q", opts.SSHKeyPath, "~/.ssh/id_ed25519")
+	}
+	if opts.SSHKeyPassEnv != "MY_SSH_PASS" {
+		t.Errorf("SSHKeyPassEnv = %q, want %q", opts.SSHKeyPassEnv, "MY_SSH_PASS")
+	}
 }
 
 func TestRunInteractive_HostMode(t *testing.T) {
-	// Answers in the order the prompts ask:
-	// 1. Git remote URL
-	// 2. Database mode (2 = host)
-	// 3. PostgreSQL host (default = localhost)
-	// 4. PostgreSQL port (default = 5432)
-	// 5. PostgreSQL username (default = postgres)
-	// 6. Database name (required)
-	// 7. PostgreSQL database name (default = db name)
-	// 8. Password env var name (default = PGPASSWORD)
-	// 9. Partition size (default = 100KB)
-	// 10. Output directory (default = ./backups)
+	// Answers in order:
+	// 1. Git remote URL (SSH — triggers SSH prompts)
+	// 2. SSH private key path (default)
+	// 3. Passphrase-protected? (n)
+	// 4. known_hosts path (empty for default)
+	// 5. Database mode (2 = host)
+	// 6. PostgreSQL host (default = localhost)
+	// 7. PostgreSQL port (default = 5432)
+	// 8. PostgreSQL username (default = postgres)
+	// 9. Database name (required)
+	// 10. PostgreSQL database name (default = db name)
+	// 11. Password env var name (default = PGPASSWORD)
+	// 12. Partition size (default = 100KB)
+	// 13. Output directory (default = ./backups)
 	answers := strings.Join([]string{
-		"git@github.com:user/backup.git", // git remote
+		"git@github.com:user/backup.git", // git remote (SSH)
+		"",                               // ssh key path (default ~/.ssh/id_ed25519)
+		"n",                              // no passphrase
+		"",                               // known_hosts (default)
 		"2",                              // host
 		"",                               // host (default localhost)
 		"",                               // port (default 5432)
@@ -230,6 +311,7 @@ func TestRunInteractive_HostMode(t *testing.T) {
 	}
 
 	assertField("GitRemote", opts.GitRemote, "git@github.com:user/backup.git")
+	assertField("SSHKeyPath", opts.SSHKeyPath, "~/.ssh/id_ed25519")
 	assertField("Mode", opts.Mode, "host")
 	assertField("Host", opts.Host, "localhost")
 	if opts.Port != 5432 {
@@ -241,4 +323,61 @@ func TestRunInteractive_HostMode(t *testing.T) {
 	assertField("PasswordEnv", opts.PasswordEnv, "PGPASSWORD")
 	assertField("PartitionSize", opts.PartitionSize, "100KB")
 	assertField("OutputDir", opts.OutputDir, "./backups")
+}
+
+func TestRunInteractive_HTTPSRemote_NoSSHPrompts(t *testing.T) {
+	// HTTPS remote should NOT trigger SSH prompts
+	answers := strings.Join([]string{
+		"https://github.com/user/repo.git", // HTTPS remote
+		"1",                                // docker
+		"my-container",                     // container name
+		"testdb",                           // database name
+		"",                                 // postgresql db (default)
+		"",                                 // password env (default)
+		"",                                 // partition size (default)
+		"",                                 // output dir (default)
+	}, "\n") + "\n"
+
+	in := strings.NewReader(answers)
+	out := &bytes.Buffer{}
+	p := NewPrompter(in, out)
+
+	opts, err := p.RunInteractive()
+	if err != nil {
+		t.Fatalf("RunInteractive() error: %v", err)
+	}
+
+	if opts.SSHKeyPath != "" {
+		t.Errorf("SSHKeyPath should be empty for HTTPS remote, got %q", opts.SSHKeyPath)
+	}
+	if strings.Contains(out.String(), "SSH remote detected") {
+		t.Error("HTTPS remote should NOT trigger SSH prompts")
+	}
+}
+
+func TestRunInteractive_NoRemote_NoSSHPrompts(t *testing.T) {
+	// Empty remote should NOT trigger SSH prompts
+	answers := strings.Join([]string{
+		"",             // no remote
+		"1",            // docker
+		"my-container", // container name
+		"testdb",       // database name
+		"",             // postgresql db (default)
+		"",             // password env (default)
+		"",             // partition size (default)
+		"",             // output dir (default)
+	}, "\n") + "\n"
+
+	in := strings.NewReader(answers)
+	out := &bytes.Buffer{}
+	p := NewPrompter(in, out)
+
+	opts, err := p.RunInteractive()
+	if err != nil {
+		t.Fatalf("RunInteractive() error: %v", err)
+	}
+
+	if opts.SSHKeyPath != "" {
+		t.Errorf("SSHKeyPath should be empty when no remote, got %q", opts.SSHKeyPath)
+	}
 }

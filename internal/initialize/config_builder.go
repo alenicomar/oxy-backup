@@ -24,6 +24,11 @@ type InitOptions struct {
 	PartitionSize string
 	OutputDir     string
 	GitRemote     string
+
+	// SSH authentication (prompted when git remote is an SSH URL).
+	SSHKeyPath        string
+	SSHKeyPassEnv     string
+	SSHKnownHostsPath string
 }
 
 // BuildConfig constructs a config.Config from InitOptions.
@@ -47,15 +52,28 @@ func BuildConfig(opts *InitOptions) *config.Config {
 		Database: opts.DbDatabase,
 	}
 
+	gitCfg := config.GitConfig{
+		AutoPush:              &autoPush,
+		CommitMessageTemplate: "backup: {{.DbName}} @ {{.Timestamp}}",
+		Remote:                "origin",
+		Branch:                "main",
+	}
+
+	// Wire SSH fields when provided.
+	if opts.SSHKeyPath != "" {
+		gitCfg.SSHKeyPath = opts.SSHKeyPath
+	}
+	if opts.SSHKeyPassEnv != "" {
+		gitCfg.SSHKeyPassEnv = opts.SSHKeyPassEnv
+	}
+	if opts.SSHKnownHostsPath != "" {
+		gitCfg.SSHKnownHostsPath = opts.SSHKnownHostsPath
+	}
+
 	return &config.Config{
 		Version:  "1",
 		Defaults: defaults,
-		Git: config.GitConfig{
-			AutoPush:              &autoPush,
-			CommitMessageTemplate: "backup: {{.DbName}} @ {{.Timestamp}}",
-			Remote:                "origin",
-			Branch:                "main",
-		},
+		Git:      gitCfg,
 		Logging: config.LoggingConfig{
 			Level:  "info",
 			Format: "text",

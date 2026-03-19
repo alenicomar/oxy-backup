@@ -103,6 +103,12 @@ func (s *Service) printSummary(dir string, opts *InitOptions) {
 	if opts.GitRemote != "" {
 		fmt.Fprintf(s.Out, "  Remote 'origin' → %s\n", opts.GitRemote)
 	}
+	if opts.SSHKeyPath != "" {
+		fmt.Fprintf(s.Out, "  SSH key: %s\n", opts.SSHKeyPath)
+		if opts.SSHKeyPassEnv != "" {
+			fmt.Fprintf(s.Out, "  Passphrase env: $%s\n", opts.SSHKeyPassEnv)
+		}
+	}
 	fmt.Fprintln(s.Out, "")
 	fmt.Fprintln(s.Out, "Next steps:")
 	fmt.Fprintf(s.Out, "  1. Set the %s environment variable\n", opts.PasswordEnv)

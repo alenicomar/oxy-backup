@@ -24,6 +24,11 @@ var (
 	partitionSize string
 	outputDir     string
 	force         bool
+
+	// SSH flags
+	sshKeyPath        string
+	sshKeyPassEnv     string
+	sshKnownHostsPath string
 )
 
 var initCmd = &cobra.Command{
@@ -74,6 +79,12 @@ func init() {
 		"output directory for backup files within the repo")
 	initCmd.Flags().BoolVarP(&force, "force", "f", false,
 		"overwrite existing oxy.yaml if present")
+	initCmd.Flags().StringVar(&sshKeyPath, "ssh-key", "",
+		"path to SSH private key (enables go-git SSH transport)")
+	initCmd.Flags().StringVar(&sshKeyPassEnv, "ssh-key-pass-env", "",
+		"env var holding SSH key passphrase (if key is encrypted)")
+	initCmd.Flags().StringVar(&sshKnownHostsPath, "ssh-known-hosts", "",
+		"path to known_hosts file (default: ~/.ssh/known_hosts)")
 
 	rootCmd.AddCommand(initCmd)
 }
@@ -136,17 +147,27 @@ func buildInitOptionsFromFlags() (*initialize.InitOptions, error) {
 		return nil, fmt.Errorf("invalid --partition-size: %w", err)
 	}
 
+	// Warn if SSH remote is used without --ssh-key
+	if initialize.IsSSHURL(gitRemote) && sshKeyPath == "" {
+		fmt.Fprintf(os.Stderr,
+			"  ⚠ SSH remote detected but --ssh-key not set. Push/pull will use system git (no go-git SSH transport).\n"+
+				"    To enable SSH key auth, add: --ssh-key ~/.ssh/id_ed25519\n")
+	}
+
 	return &initialize.InitOptions{
-		Mode:          dbMode,
-		Container:     dbContainer,
-		Host:          dbHost,
-		Port:          dbPort,
-		Username:      dbUsername,
-		DbName:        dbName,
-		DbDatabase:    dbDatabase,
-		PasswordEnv:   passwordEnv,
-		PartitionSize: partitionSize,
-		OutputDir:     outputDir,
-		GitRemote:     gitRemote,
+		Mode:              dbMode,
+		Container:         dbContainer,
+		Host:              dbHost,
+		Port:              dbPort,
+		Username:          dbUsername,
+		DbName:            dbName,
+		DbDatabase:        dbDatabase,
+		PasswordEnv:       passwordEnv,
+		PartitionSize:     partitionSize,
+		OutputDir:         outputDir,
+		GitRemote:         gitRemote,
+		SSHKeyPath:        sshKeyPath,
+		SSHKeyPassEnv:     sshKeyPassEnv,
+		SSHKnownHostsPath: sshKnownHostsPath,
 	}, nil
 }

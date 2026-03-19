@@ -219,3 +219,55 @@ func TestWriteConfig_ValidYAML(t *testing.T) {
 		t.Errorf("expected db.Database 'app_db', got %q", parsed.Databases[0].Database)
 	}
 }
+
+func TestBuildConfig_WithSSHFields(t *testing.T) {
+	opts := &InitOptions{
+		Mode:              "docker",
+		Container:         "pg",
+		DbName:            "mydb",
+		DbDatabase:        "mydb",
+		PasswordEnv:       "PGPASSWORD",
+		PartitionSize:     "100KB",
+		OutputDir:         "./backups",
+		GitRemote:         "git@github.com:user/repo.git",
+		SSHKeyPath:        "~/.ssh/id_ed25519",
+		SSHKeyPassEnv:     "SSH_PASS",
+		SSHKnownHostsPath: "/custom/known_hosts",
+	}
+
+	cfg := BuildConfig(opts)
+
+	if cfg.Git.SSHKeyPath != "~/.ssh/id_ed25519" {
+		t.Errorf("Git.SSHKeyPath = %q, want %q", cfg.Git.SSHKeyPath, "~/.ssh/id_ed25519")
+	}
+	if cfg.Git.SSHKeyPassEnv != "SSH_PASS" {
+		t.Errorf("Git.SSHKeyPassEnv = %q, want %q", cfg.Git.SSHKeyPassEnv, "SSH_PASS")
+	}
+	if cfg.Git.SSHKnownHostsPath != "/custom/known_hosts" {
+		t.Errorf("Git.SSHKnownHostsPath = %q, want %q", cfg.Git.SSHKnownHostsPath, "/custom/known_hosts")
+	}
+}
+
+func TestBuildConfig_WithoutSSHFields(t *testing.T) {
+	opts := &InitOptions{
+		Mode:          "docker",
+		Container:     "pg",
+		DbName:        "mydb",
+		DbDatabase:    "mydb",
+		PasswordEnv:   "PGPASSWORD",
+		PartitionSize: "100KB",
+		OutputDir:     "./backups",
+	}
+
+	cfg := BuildConfig(opts)
+
+	if cfg.Git.SSHKeyPath != "" {
+		t.Errorf("Git.SSHKeyPath should be empty, got %q", cfg.Git.SSHKeyPath)
+	}
+	if cfg.Git.SSHKeyPassEnv != "" {
+		t.Errorf("Git.SSHKeyPassEnv should be empty, got %q", cfg.Git.SSHKeyPassEnv)
+	}
+	if cfg.Git.SSHKnownHostsPath != "" {
+		t.Errorf("Git.SSHKnownHostsPath should be empty, got %q", cfg.Git.SSHKnownHostsPath)
+	}
+}

@@ -86,6 +86,20 @@ func (p *Prompter) selectOne(label string, options []string, defaultIdx int) (st
 	}
 }
 
+// IsSSHURL returns true if the URL looks like an SSH git remote.
+// Matches patterns like "git@host:path" or "ssh://host/path".
+func IsSSHURL(url string) bool {
+	if strings.HasPrefix(url, "ssh://") {
+		return true
+	}
+	// SCP-like syntax: git@github.com:user/repo.git
+	// Must have @ before the first : and no // (to exclude https://)
+	if strings.Contains(url, "@") && strings.Contains(url, ":") && !strings.Contains(url, "://") {
+		return true
+	}
+	return false
+}
+
 // RunInteractive runs the full interactive init wizard and returns InitOptions.
 func (p *Prompter) RunInteractive() (*InitOptions, error) {
 	fmt.Fprintln(p.out, "")
@@ -97,6 +111,18 @@ func (p *Prompter) RunInteractive() (*InitOptions, error) {
 
 	// 1. Git remote
 	opts.GitRemote = p.ask("Git remote URL (empty to skip)", "")
+
+	// 1b. SSH configuration — prompted when remote is an SSH URL
+	if IsSSHURL(opts.GitRemote) {
+		fmt.Fprintln(p.out, "")
+		fmt.Fprintln(p.out, "SSH remote detected — configuring key authentication:")
+		opts.SSHKeyPath = p.ask("SSH private key path", "~/.ssh/id_ed25519")
+		hasPass := p.ask("Is the key passphrase-protected? (y/n)", "n")
+		if strings.EqualFold(hasPass, "y") || strings.EqualFold(hasPass, "yes") {
+			opts.SSHKeyPassEnv = p.ask("Env var holding passphrase", "SSH_KEY_PASS")
+		}
+		opts.SSHKnownHostsPath = p.ask("known_hosts path (empty for default)", "")
+	}
 
 	fmt.Fprintln(p.out, "")
 
