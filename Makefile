@@ -2,8 +2,9 @@ BINARY_NAME=oxy
 BUILD_DIR=.
 GO=go
 GOFLAGS=-v
+PREFIX=/usr/local
 
-.PHONY: build test lint clean help
+.PHONY: build test lint clean install uninstall help
 
 ## build: Compile the binary
 build:
@@ -21,6 +22,15 @@ test-cover:
 ## lint: Run go vet
 lint:
 	$(GO) vet ./...
+
+## install: Install binary to PREFIX/bin (default /usr/local/bin)
+install: build
+	install -d $(PREFIX)/bin
+	install -m 755 $(BUILD_DIR)/$(BINARY_NAME) $(PREFIX)/bin/$(BINARY_NAME)
+
+## uninstall: Remove binary from PREFIX/bin
+uninstall:
+	rm -f $(PREFIX)/bin/$(BINARY_NAME)
 
 ## clean: Remove build artifacts
 clean:
