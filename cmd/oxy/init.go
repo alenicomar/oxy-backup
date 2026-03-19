@@ -68,11 +68,11 @@ func init() {
 		"PostgreSQL database name (defaults to --db-name)")
 	initCmd.Flags().StringVar(&passwordEnv, "password-env", "PGPASSWORD",
 		"environment variable name for the database password")
-	initCmd.Flags().StringVar(&partitionSize, "partition-size", "1MB",
+	initCmd.Flags().StringVar(&partitionSize, "partition-size", "100KB",
 		"backup partition size (e.g. 100KB, 1MB, 5MB)")
 	initCmd.Flags().StringVar(&outputDir, "output-dir", "./backups",
 		"output directory for backup files within the repo")
-	initCmd.Flags().BoolVar(&force, "force", false,
+	initCmd.Flags().BoolVarP(&force, "force", "f", false,
 		"overwrite existing oxy.yaml if present")
 
 	rootCmd.AddCommand(initCmd)

@@ -73,7 +73,8 @@ func TestPrompter_SelectOne_ValidChoice(t *testing.T) {
 }
 
 func TestPrompter_SelectOne_InvalidChoice(t *testing.T) {
-	in := strings.NewReader("99\n")
+	// Invalid input "99" triggers re-prompt, then empty input accepts default
+	in := strings.NewReader("99\n\n")
 	out := &bytes.Buffer{}
 	p := NewPrompter(in, out)
 
@@ -81,6 +82,9 @@ func TestPrompter_SelectOne_InvalidChoice(t *testing.T) {
 
 	if got != "alpha" {
 		t.Errorf("selectOne() = %q, want default %q for invalid input", got, "alpha")
+	}
+	if !strings.Contains(out.String(), "Invalid choice") {
+		t.Error("expected 'Invalid choice' message in output")
 	}
 }
 
@@ -92,7 +96,7 @@ func TestRunInteractive_DockerMode(t *testing.T) {
 	// 4. Database name (required)
 	// 5. PostgreSQL database name (default = db name)
 	// 6. Password env var name (default = PGPASSWORD)
-	// 7. Partition size (default = 1MB)
+	// 7. Partition size (default = 100KB)
 	// 8. Output directory (default = ./backups)
 	answers := strings.Join([]string{
 		"git@github.com:user/repo.git", // git remote
@@ -141,7 +145,7 @@ func TestRunInteractive_HostMode(t *testing.T) {
 	// 6. Database name (required)
 	// 7. PostgreSQL database name (default = db name)
 	// 8. Password env var name (default = PGPASSWORD)
-	// 9. Partition size (default = 1MB)
+	// 9. Partition size (default = 100KB)
 	// 10. Output directory (default = ./backups)
 	answers := strings.Join([]string{
 		"git@github.com:user/backup.git", // git remote
@@ -152,7 +156,7 @@ func TestRunInteractive_HostMode(t *testing.T) {
 		"production_db",                  // database name (label)
 		"",                               // postgresql database name (default = label)
 		"",                               // password env var (default PGPASSWORD)
-		"",                               // partition size (default 1MB)
+		"",                               // partition size (default 100KB)
 		"",                               // output dir (default ./backups)
 	}, "\n") + "\n"
 
@@ -182,6 +186,6 @@ func TestRunInteractive_HostMode(t *testing.T) {
 	assertField("DbName", opts.DbName, "production_db")
 	assertField("DbDatabase", opts.DbDatabase, "production_db")
 	assertField("PasswordEnv", opts.PasswordEnv, "PGPASSWORD")
-	assertField("PartitionSize", opts.PartitionSize, "1MB")
+	assertField("PartitionSize", opts.PartitionSize, "100KB")
 	assertField("OutputDir", opts.OutputDir, "./backups")
 }

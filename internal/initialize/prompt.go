@@ -53,22 +53,26 @@ func (p *Prompter) askRequired(label string) string {
 }
 
 // selectOne presents a numbered choice and returns the selected option string.
+// Re-prompts on invalid input; empty input accepts the default.
 func (p *Prompter) selectOne(label string, options []string, defaultIdx int) string {
-	fmt.Fprintln(p.out, label)
-	for i, opt := range options {
-		fmt.Fprintf(p.out, "  [%d] %s\n", i+1, opt)
+	for {
+		fmt.Fprintln(p.out, label)
+		for i, opt := range options {
+			fmt.Fprintf(p.out, "  [%d] %s\n", i+1, opt)
+		}
+		fmt.Fprintf(p.out, "Choice [%d]: ", defaultIdx+1)
+		p.scanner.Scan()
+		val := strings.TrimSpace(p.scanner.Text())
+		if val == "" {
+			return options[defaultIdx]
+		}
+		n, err := strconv.Atoi(val)
+		if err != nil || n < 1 || n > len(options) {
+			fmt.Fprintf(p.out, "  Invalid choice. Please enter 1-%d.\n", len(options))
+			continue
+		}
+		return options[n-1]
 	}
-	fmt.Fprintf(p.out, "Choice [%d]: ", defaultIdx+1)
-	p.scanner.Scan()
-	val := strings.TrimSpace(p.scanner.Text())
-	if val == "" {
-		return options[defaultIdx]
-	}
-	n, err := strconv.Atoi(val)
-	if err != nil || n < 1 || n > len(options) {
-		return options[defaultIdx]
-	}
-	return options[n-1]
 }
 
 // RunInteractive runs the full interactive init wizard and returns InitOptions.
@@ -115,11 +119,11 @@ func (p *Prompter) RunInteractive() (*InitOptions, error) {
 	fmt.Fprintln(p.out, "")
 
 	// 5. Backup settings
-	opts.PartitionSize = p.ask("Partition size", "1MB")
+	opts.PartitionSize = p.ask("Partition size", "100KB")
 	// Validate partition size
 	if _, err := config.ParseSize(opts.PartitionSize); err != nil {
-		opts.PartitionSize = "1MB"
-		fmt.Fprintf(p.out, "  Invalid size, using default: 1MB\n")
+		opts.PartitionSize = "100KB"
+		fmt.Fprintf(p.out, "  Invalid size, using default: 100KB\n")
 	}
 
 	opts.OutputDir = p.ask("Output directory", "./backups")
