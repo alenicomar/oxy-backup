@@ -1,4 +1,4 @@
-# backup-lite configuration example
+# oxy-backup configuration example
 # ===================================
 # Environment variables are interpolated using ${VAR_NAME} syntax.
 

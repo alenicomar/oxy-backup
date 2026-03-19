@@ -5,11 +5,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/backup-lite/backup-lite/internal/backup"
-	"github.com/backup-lite/backup-lite/internal/config"
-	"github.com/backup-lite/backup-lite/internal/exitcode"
-	"github.com/backup-lite/backup-lite/internal/git"
-	"github.com/backup-lite/backup-lite/internal/postgres"
+	"github.com/alenicomar/oxy-backup/internal/backup"
+	"github.com/alenicomar/oxy-backup/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/exitcode"
+	"github.com/alenicomar/oxy-backup/internal/git"
+	"github.com/alenicomar/oxy-backup/internal/postgres"
 	"github.com/spf13/cobra"
 )
 

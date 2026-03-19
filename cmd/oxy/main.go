@@ -1,4 +1,4 @@
-// Package main is the entry point for the backup-lite CLI.
+// Package main is the entry point for the oxy CLI.
 package main
 
 import (
@@ -8,9 +8,9 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/backup-lite/backup-lite/internal/config"
-	"github.com/backup-lite/backup-lite/internal/exitcode"
-	"github.com/backup-lite/backup-lite/internal/logging"
+	"github.com/alenicomar/oxy-backup/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/exitcode"
+	"github.com/alenicomar/oxy-backup/internal/logging"
 	"github.com/spf13/cobra"
 
 	"log/slog"
@@ -37,9 +37,9 @@ func main() {
 }
 
 var rootCmd = &cobra.Command{
-	Use:   "backup-lite",
+	Use:   "oxy",
 	Short: "PostgreSQL backup & restore with Git-based version control",
-	Long: `backup-lite automates PostgreSQL database backups via pg_dump,
+	Long: `oxy automates PostgreSQL database backups via pg_dump,
 partitions the output into manageable chunks for efficient Git storage,
 commits the results, and supports point-in-time restore.`,
 	SilenceUsage:  true,
@@ -80,7 +80,7 @@ commits the results, and supports point-in-time restore.`,
 }
 
 func init() {
-	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "backup-lite.yaml", "path to config file")
+	rootCmd.PersistentFlags().StringVar(&cfgPath, "config", "oxy.yaml", "path to config file")
 	rootCmd.PersistentFlags().StringVar(&logFormat, "log-format", "text", "log format (text|json)")
 	rootCmd.PersistentFlags().StringVar(&logLevel, "log-level", "info", "log level (debug|info|warn|error)")
 	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "validate config and show what would be done without executing")

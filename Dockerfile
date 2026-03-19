@@ -1,4 +1,4 @@
-# Multi-stage build for backup-lite
+# Multi-stage build for oxy-backup
 # Stage 1: Build the Go binary
 FROM golang:1.25-alpine AS builder
 
@@ -9,7 +9,7 @@ COPY go.mod go.sum ./
 RUN go mod download
 
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -o /backup-lite ./cmd/backup-lite/
+RUN CGO_ENABLED=0 GOOS=linux go build -o /oxy ./cmd/oxy/
 
 # Stage 2: Minimal runtime with postgresql-client and git
 FROM alpine:3.21
@@ -20,12 +20,12 @@ RUN apk add --no-cache \
     ca-certificates \
     tzdata
 
-COPY --from=builder /backup-lite /usr/local/bin/backup-lite
+COPY --from=builder /oxy /usr/local/bin/oxy
 
 # Create a non-root user
-RUN addgroup -S backuplite && adduser -S backuplite -G backuplite
-USER backuplite
+RUN addgroup -S oxy && adduser -S oxy -G oxy
+USER oxy
 
 WORKDIR /data
 
-ENTRYPOINT ["backup-lite"]
+ENTRYPOINT ["oxy"]

@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/backup-lite/backup-lite/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/config"
 )
 
 // ExecPgExecutor implements PgExecutor using os/exec.

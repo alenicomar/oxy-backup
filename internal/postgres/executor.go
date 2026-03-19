@@ -6,7 +6,7 @@ import (
 	"context"
 	"io"
 
-	"github.com/backup-lite/backup-lite/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/config"
 )
 
 // PgExecutor abstracts PostgreSQL tool execution for testability.

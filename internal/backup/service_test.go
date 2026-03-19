@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/backup-lite/backup-lite/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/config"
 )
 
 // --- Mocks ---
@@ -63,6 +63,10 @@ func (m *mockGitClient) Push(_ context.Context) error {
 func (m *mockGitClient) Restore(_ context.Context, _ ...string) error {
 	return nil
 }
+
+func (m *mockGitClient) Init(_ context.Context) error { return nil }
+
+func (m *mockGitClient) RemoteAdd(_ context.Context, _, _ string) error { return nil }
 
 // --- Tests ---
 

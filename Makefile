@@ -1,4 +1,4 @@
-BINARY_NAME=backup-lite
+BINARY_NAME=oxy
 BUILD_DIR=.
 GO=go
 GOFLAGS=-v
@@ -7,7 +7,7 @@ GOFLAGS=-v
 
 ## build: Compile the binary
 build:
-	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/backup-lite/
+	$(GO) build $(GOFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) ./cmd/oxy/
 
 ## test: Run all unit tests
 test:

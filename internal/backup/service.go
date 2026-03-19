@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/backup-lite/backup-lite/internal/config"
-	"github.com/backup-lite/backup-lite/internal/git"
-	"github.com/backup-lite/backup-lite/internal/postgres"
+	"github.com/alenicomar/oxy-backup/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/git"
+	"github.com/alenicomar/oxy-backup/internal/postgres"
 )
 
 // Service orchestrates the backup flow: dump → partition → git.

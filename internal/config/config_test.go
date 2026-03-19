@@ -151,7 +151,7 @@ databases:
 
 func TestUndefinedEnvVarResolvesToEmpty(t *testing.T) {
 	// Make sure the env var does NOT exist
-	os.Unsetenv("BACKUP_LITE_UNDEFINED_VAR_XYZ")
+	os.Unsetenv("OXY_UNDEFINED_VAR_XYZ")
 
 	yaml := `
 version: "1"
@@ -160,7 +160,7 @@ databases:
     mode: docker
     container: pg
     database: myapp
-    password: "${BACKUP_LITE_UNDEFINED_VAR_XYZ}"
+    password: "${OXY_UNDEFINED_VAR_XYZ}"
 `
 	cfg := loadFromString(t, yaml)
 	if cfg.Databases[0].Password != "" {

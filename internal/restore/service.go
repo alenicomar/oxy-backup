@@ -7,10 +7,10 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/backup-lite/backup-lite/internal/backup"
-	"github.com/backup-lite/backup-lite/internal/config"
-	"github.com/backup-lite/backup-lite/internal/git"
-	"github.com/backup-lite/backup-lite/internal/postgres"
+	"github.com/alenicomar/oxy-backup/internal/backup"
+	"github.com/alenicomar/oxy-backup/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/git"
+	"github.com/alenicomar/oxy-backup/internal/postgres"
 )
 
 // Service orchestrates the restore flow: validate → assemble → load → cleanup.

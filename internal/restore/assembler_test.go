@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/backup-lite/backup-lite/internal/backup"
+	"github.com/alenicomar/oxy-backup/internal/backup"
 )
 
 func TestReassembleSuccess(t *testing.T) {

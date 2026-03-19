@@ -1,5 +1,5 @@
 // Package config handles YAML configuration loading, env var interpolation,
-// validation, and defaults merging for backup-lite.
+// validation, and defaults merging for oxy-backup.
 package config
 
 import (
@@ -21,24 +21,24 @@ type Config struct {
 // DatabaseConfig holds per-database backup/restore settings.
 type DatabaseConfig struct {
 	Name          string   `yaml:"name"`
-	Mode          string   `yaml:"mode"`      // "docker" or "host"
-	Container     string   `yaml:"container"` // required if mode=docker
-	Host          string   `yaml:"host"`      // required if mode=host
-	Port          int      `yaml:"port"`
-	Username      string   `yaml:"username"`
-	Password      string   `yaml:"password"`
+	Mode          string   `yaml:"mode"`                // "docker" or "host"
+	Container     string   `yaml:"container,omitempty"` // required if mode=docker
+	Host          string   `yaml:"host,omitempty"`      // required if mode=host
+	Port          int      `yaml:"port,omitempty"`
+	Username      string   `yaml:"username,omitempty"`
+	Password      string   `yaml:"password,omitempty"`
 	Database      string   `yaml:"database"`
-	PgDumpArgs    []string `yaml:"pg_dump_args"`
-	PartitionSize string   `yaml:"partition_size"` // e.g. "100KB", "1MB"
-	OutputDir     string   `yaml:"output_dir"`
+	PgDumpArgs    []string `yaml:"pg_dump_args,omitempty"`
+	PartitionSize string   `yaml:"partition_size,omitempty"` // e.g. "100KB", "1MB"
+	OutputDir     string   `yaml:"output_dir,omitempty"`
 }
 
 // GitConfig holds Git operation settings.
 type GitConfig struct {
-	AutoPush              *bool  `yaml:"auto_push"`
-	CommitMessageTemplate string `yaml:"commit_message_template"`
-	Remote                string `yaml:"remote"`
-	Branch                string `yaml:"branch"`
+	AutoPush              *bool  `yaml:"auto_push,omitempty"`
+	CommitMessageTemplate string `yaml:"commit_message_template,omitempty"`
+	Remote                string `yaml:"remote,omitempty"`
+	Branch                string `yaml:"branch,omitempty"`
 }
 
 // AutoPushEnabled returns true if auto_push is nil (default) or explicitly true.
@@ -51,8 +51,8 @@ func (g *GitConfig) AutoPushEnabled() bool {
 
 // LoggingConfig holds logging preferences.
 type LoggingConfig struct {
-	Level  string `yaml:"level"`
-	Format string `yaml:"format"`
+	Level  string `yaml:"level,omitempty"`
+	Format string `yaml:"format,omitempty"`
 }
 
 // Validate checks required fields and mode-specific constraints.
