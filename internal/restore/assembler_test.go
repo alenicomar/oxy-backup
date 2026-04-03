@@ -23,7 +23,6 @@ func TestReassembleSuccess(t *testing.T) {
 
 	manifest := &backup.Manifest{
 		DbName:    "testdb",
-		Timestamp: "20260318-140000",
 		PartCount: 3,
 	}
 

@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/alenicomar/oxy-backup/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/git"
 )
 
 // --- Mocks ---
@@ -68,6 +69,14 @@ func (m *mockGitClient) Init(_ context.Context) error { return nil }
 
 func (m *mockGitClient) RemoteAdd(_ context.Context, _, _ string) error { return nil }
 
+func (m *mockGitClient) Log(_ context.Context, _ string, _ int) ([]git.CommitInfo, error) {
+	return nil, nil
+}
+
+func (m *mockGitClient) CheckoutFiles(_ context.Context, _ string, _ ...string) error {
+	return nil
+}
+
 // --- Tests ---
 
 func boolPtr(b bool) *bool { return &b }
@@ -117,16 +126,17 @@ func TestServiceRunSuccess(t *testing.T) {
 		t.Errorf("commit message = %q, want prefix 'backup: testdb @'", gitMock.commitMessage)
 	}
 
-	// Verify partitions directory was created with files
-	entries, _ := filepath.Glob(filepath.Join(dir, "partitions", "testdb", "*", "part_*.sql"))
+	// Verify partitions written at fixed path (no timestamp subdir — Git provides versioning)
+	partDir := filepath.Join(dir, "partitions", "testdb")
+	entries, _ := filepath.Glob(filepath.Join(partDir, "part_*.sql"))
 	if len(entries) == 0 {
 		t.Error("no partition files found")
 	}
 
-	// Verify manifest exists
-	manifests, _ := filepath.Glob(filepath.Join(dir, "partitions", "testdb", "*", "manifest.json"))
-	if len(manifests) == 0 {
-		t.Error("no manifest.json found")
+	// Verify manifest exists at fixed path
+	manifestPath := filepath.Join(partDir, "manifest.json")
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		t.Error("manifest.json not found at fixed path")
 	}
 }
 

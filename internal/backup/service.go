@@ -24,25 +24,14 @@ type Service struct {
 
 // Run executes the full backup pipeline for a single database.
 func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig) error {
-	var cleanupStack []func()
-	cleanup := func() {
-		for i := len(cleanupStack) - 1; i >= 0; i-- {
-			cleanupStack[i]()
-		}
-	}
-
-	// 1. Generate timestamp
+	// 1. Generate timestamp for commit message
 	timestamp := time.Now().UTC().Format("20060102-150405")
 
-	// 2. Create output directory
-	partDir := filepath.Join(dbCfg.OutputDir, "partitions", dbCfg.Name, timestamp)
+	// 2. Fixed output directory (no timestamp in path — Git provides versioning)
+	partDir := filepath.Join(dbCfg.OutputDir, "partitions", dbCfg.Name)
 	if err := os.MkdirAll(partDir, 0755); err != nil {
 		return fmt.Errorf("creating partition dir: %w", err)
 	}
-	cleanupStack = append(cleanupStack, func() {
-		s.Logger.Debug("cleanup: removing partition dir", "dir", partDir)
-		os.RemoveAll(partDir)
-	})
 
 	s.Logger.Info("starting backup",
 		"database", dbCfg.Name,
@@ -51,22 +40,25 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig) error {
 		"output_dir", partDir,
 	)
 
-	// 3. Check pg_dump version (best-effort, logs warning only)
+	// 3. Clean stale partition files (partition count may change between backups)
+	if err := cleanStalePartitions(partDir); err != nil {
+		return fmt.Errorf("cleaning stale partitions: %w", err)
+	}
+
+	// 4. Check pg_dump version (best-effort, logs warning only)
 	if execPg, ok := s.PgExecutor.(*postgres.ExecPgExecutor); ok {
 		execPg.CheckVersion(ctx, dbCfg)
 	}
 
-	// 4. Execute pg_dump
+	// 5. Execute pg_dump
 	reader, err := s.PgExecutor.DumpDatabase(ctx, dbCfg)
 	if err != nil {
-		cleanup()
 		return fmt.Errorf("dump failed: %w", err)
 	}
 
-	// 4. Partition the dump
+	// 6. Partition the dump
 	maxBytes, err := dbCfg.PartitionSizeBytes()
 	if err != nil {
-		cleanup()
 		return fmt.Errorf("invalid partition size: %w", err)
 	}
 
@@ -77,13 +69,11 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig) error {
 
 	parts, err := partitioner.Split(ctx, reader, partDir)
 	if err != nil {
-		cleanup()
 		return fmt.Errorf("partitioning failed: %w", err)
 	}
 
-	// 5. Write manifest
-	if err := WriteManifest(partDir, dbCfg.Name, timestamp, parts); err != nil {
-		cleanup()
+	// 7. Write manifest
+	if err := WriteManifest(partDir, dbCfg.Name, parts); err != nil {
 		return fmt.Errorf("writing manifest: %w", err)
 	}
 
@@ -93,23 +83,24 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig) error {
 		"directory", partDir,
 	)
 
-	// 6. Validate git repo before any git operations
+	// 8. Validate git repo before any git operations
 	if err := s.GitClient.ValidateRepo(ctx); err != nil {
 		return fmt.Errorf("git validation failed: %w", err)
 	}
 
-	// 7. Git add (from here on, don't clean up partition files — they're valid)
-	if err := s.GitClient.Add(ctx, partDir); err != nil {
+	// 9. Git add — explicit file list (manifest + partitions + extra_paths)
+	addPaths := s.collectAddPaths(partDir, parts)
+	if err := s.GitClient.Add(ctx, addPaths...); err != nil {
 		return fmt.Errorf("git add failed: %w", err)
 	}
 
-	// 8. Git commit
+	// 10. Git commit
 	commitMsg := s.formatCommitMessage(dbCfg.Name, timestamp)
 	if err := s.GitClient.Commit(ctx, commitMsg); err != nil {
 		return fmt.Errorf("git commit failed: %w", err)
 	}
 
-	// 9. Git push (if configured)
+	// 11. Git push (if configured)
 	if s.GitConfig.AutoPushEnabled() {
 		if err := s.GitClient.Push(ctx); err != nil {
 			return fmt.Errorf("git push failed: %w", err)
@@ -123,6 +114,43 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig) error {
 	)
 
 	return nil
+}
+
+// cleanStalePartitions removes existing part_*.sql and manifest.json from the directory.
+// This prevents orphan files when partition count changes between backups.
+func cleanStalePartitions(dir string) error {
+	patterns := []string{"part_*.sql", "manifest.json"}
+	for _, pattern := range patterns {
+		matches, err := filepath.Glob(filepath.Join(dir, pattern))
+		if err != nil {
+			return fmt.Errorf("globbing %s: %w", pattern, err)
+		}
+		for _, match := range matches {
+			if err := os.Remove(match); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("removing stale file %s: %w", match, err)
+			}
+		}
+	}
+	return nil
+}
+
+// collectAddPaths builds the explicit file list for git add:
+// manifest.json + all partition files + extra_paths from config.
+func (s *Service) collectAddPaths(partDir string, parts []PartitionInfo) []string {
+	paths := make([]string, 0, len(parts)+1+len(s.GitConfig.ExtraPaths))
+
+	// Manifest
+	paths = append(paths, filepath.Join(partDir, "manifest.json"))
+
+	// Partition files
+	for _, p := range parts {
+		paths = append(paths, filepath.Join(partDir, p.Filename))
+	}
+
+	// Extra paths from config (already validated as relative in config.Validate)
+	paths = append(paths, s.GitConfig.ExtraPaths...)
+
+	return paths
 }
 
 // RunAll executes backup for all databases sequentially.

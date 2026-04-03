@@ -37,10 +37,11 @@ type DatabaseConfig struct {
 
 // GitConfig holds Git operation settings.
 type GitConfig struct {
-	AutoPush              *bool  `yaml:"auto_push,omitempty"`
-	CommitMessageTemplate string `yaml:"commit_message_template,omitempty"`
-	Remote                string `yaml:"remote,omitempty"`
-	Branch                string `yaml:"branch,omitempty"`
+	AutoPush              *bool    `yaml:"auto_push,omitempty"`
+	CommitMessageTemplate string   `yaml:"commit_message_template,omitempty"`
+	Remote                string   `yaml:"remote,omitempty"`
+	Branch                string   `yaml:"branch,omitempty"`
+	ExtraPaths            []string `yaml:"extra_paths,omitempty"` // additional relative paths to include in git add
 
 	// SSH authentication for private repos (enables go-git adapter).
 	SSHKeyPath        string `yaml:"ssh_key_path,omitempty"`         // path to private key, e.g. "~/.ssh/id_ed25519"
@@ -103,6 +104,11 @@ func (c *Config) Validate(logger *slog.Logger) error {
 
 	// Validate SSH config
 	if err := c.Git.validateSSH(); err != nil {
+		return err
+	}
+
+	// Validate extra_paths
+	if err := c.Git.validateExtraPaths(); err != nil {
 		return err
 	}
 
@@ -234,6 +240,22 @@ func (g *GitConfig) validateSSH() error {
 		}
 	}
 
+	return nil
+}
+
+// validateExtraPaths checks that extra_paths entries are relative and safe.
+func (g *GitConfig) validateExtraPaths() error {
+	for i, p := range g.ExtraPaths {
+		if p == "" {
+			return fmt.Errorf("config validation: git.extra_paths[%d] must not be empty", i)
+		}
+		if filepath.IsAbs(p) {
+			return fmt.Errorf("config validation: git.extra_paths[%d] %q must be a relative path", i, p)
+		}
+		if strings.Contains(p, "..") {
+			return fmt.Errorf("config validation: git.extra_paths[%d] %q must not contain '..'", i, p)
+		}
+	}
 	return nil
 }
 

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"strings"
+	"time"
 )
 
 // ExecGitClient implements GitClient using the git CLI via os/exec.
@@ -84,6 +86,67 @@ func (g *ExecGitClient) Init(ctx context.Context) error {
 func (g *ExecGitClient) RemoteAdd(ctx context.Context, name, url string) error {
 	_, err := g.run(ctx, "remote", "add", name, url)
 	return err
+}
+
+// Log returns commit history filtered by path, newest first.
+// Uses: git log --format=<format> [--max-count=N] -- <path>
+func (g *ExecGitClient) Log(ctx context.Context, path string, limit int) ([]CommitInfo, error) {
+	// Format: SHA<tab>short SHA<tab>ISO date<tab>subject
+	const logFormat = "%H\t%h\t%aI\t%s"
+
+	args := []string{"log", "--format=" + logFormat}
+	if limit > 0 {
+		args = append(args, fmt.Sprintf("--max-count=%d", limit))
+	}
+	if path != "" {
+		args = append(args, "--", path)
+	}
+
+	out, err := g.run(ctx, args...)
+	if err != nil {
+		return nil, fmt.Errorf("git log: %w", err)
+	}
+
+	out = strings.TrimSpace(out)
+	if out == "" {
+		return nil, nil
+	}
+
+	lines := strings.Split(out, "\n")
+	commits := make([]CommitInfo, 0, len(lines))
+
+	for _, line := range lines {
+		parts := strings.SplitN(line, "\t", 4)
+		if len(parts) != 4 {
+			continue
+		}
+
+		date, parseErr := time.Parse(time.RFC3339, parts[2])
+		if parseErr != nil {
+			// Best effort — use zero time.
+			date = time.Time{}
+		}
+
+		commits = append(commits, CommitInfo{
+			SHA:      parts[0],
+			ShortSHA: parts[1],
+			Date:     date.UTC(),
+			Message:  parts[3],
+		})
+	}
+
+	return commits, nil
+}
+
+// CheckoutFiles restores files from a specific commit SHA.
+// Uses: git checkout <sha> -- <paths...>
+func (g *ExecGitClient) CheckoutFiles(ctx context.Context, sha string, paths ...string) error {
+	args := append([]string{"checkout", sha, "--"}, paths...)
+	_, err := g.run(ctx, args...)
+	if err != nil {
+		return fmt.Errorf("git checkout %s: %w", sha, err)
+	}
+	return nil
 }
 
 func (g *ExecGitClient) run(ctx context.Context, args ...string) (string, error) {

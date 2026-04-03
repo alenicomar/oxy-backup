@@ -10,7 +10,6 @@ import (
 // Manifest holds metadata about a partitioned backup.
 type Manifest struct {
 	DbName    string          `json:"db_name"`
-	Timestamp string          `json:"timestamp"`
 	PartCount int             `json:"part_count"`
 	Parts     []PartitionInfo `json:"parts"`
 }
@@ -22,10 +21,9 @@ type PartitionInfo struct {
 }
 
 // WriteManifest writes the manifest as JSON to the given directory.
-func WriteManifest(dir, dbName, timestamp string, parts []PartitionInfo) error {
+func WriteManifest(dir, dbName string, parts []PartitionInfo) error {
 	m := Manifest{
 		DbName:    dbName,
-		Timestamp: timestamp,
 		PartCount: len(parts),
 		Parts:     parts,
 	}

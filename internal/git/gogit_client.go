@@ -253,6 +253,116 @@ func (g *GoGitClient) RemoteAdd(ctx context.Context, name, url string) error {
 	return nil
 }
 
+// Log returns commit history filtered by path, newest first.
+func (g *GoGitClient) Log(ctx context.Context, path string, limit int) ([]CommitInfo, error) {
+	repo, err := gogit.PlainOpen(g.WorkDir)
+	if err != nil {
+		return nil, fmt.Errorf("opening repo: %w", err)
+	}
+
+	logOpts := &gogit.LogOptions{
+		Order: gogit.LogOrderCommitterTime,
+	}
+	if path != "" {
+		// Normalize to forward slashes for go-git.
+		normalized := filepath.ToSlash(path)
+		// Make relative if absolute.
+		if rel, relErr := filepath.Rel(g.WorkDir, normalized); relErr == nil {
+			normalized = filepath.ToSlash(rel)
+		}
+		filterPath := normalized
+		logOpts.PathFilter = func(p string) bool {
+			return strings.HasPrefix(p, filterPath)
+		}
+	}
+
+	iter, err := repo.Log(logOpts)
+	if err != nil {
+		return nil, fmt.Errorf("git log: %w", err)
+	}
+
+	var commits []CommitInfo
+	err = iter.ForEach(func(c *object.Commit) error {
+		if limit > 0 && len(commits) >= limit {
+			return fmt.Errorf("stop") // break iteration
+		}
+
+		sha := c.Hash.String()
+		short := sha
+		if len(sha) >= 7 {
+			short = sha[:7]
+		}
+
+		commits = append(commits, CommitInfo{
+			SHA:      sha,
+			ShortSHA: short,
+			Date:     c.Author.When.UTC(),
+			Message:  strings.SplitN(c.Message, "\n", 2)[0],
+		})
+		return nil
+	})
+
+	// The "stop" error is our way to break early — not a real error.
+	if err != nil && err.Error() != "stop" {
+		return nil, fmt.Errorf("iterating log: %w", err)
+	}
+
+	return commits, nil
+}
+
+// CheckoutFiles restores files from a specific commit SHA.
+// Reads file contents from the commit's tree and writes them to the working directory.
+func (g *GoGitClient) CheckoutFiles(ctx context.Context, sha string, paths ...string) error {
+	repo, err := gogit.PlainOpen(g.WorkDir)
+	if err != nil {
+		return fmt.Errorf("opening repo: %w", err)
+	}
+
+	hash := plumbing.NewHash(sha)
+	commit, err := repo.CommitObject(hash)
+	if err != nil {
+		return fmt.Errorf("getting commit %s: %w", sha, err)
+	}
+
+	tree, err := commit.Tree()
+	if err != nil {
+		return fmt.Errorf("getting tree for %s: %w", sha, err)
+	}
+
+	for _, p := range paths {
+		rel, relErr := filepath.Rel(g.WorkDir, p)
+		if relErr != nil {
+			rel = p
+		}
+		rel = filepath.ToSlash(rel)
+
+		g.Logger.Debug("checkout file from commit", "sha", sha[:7], "path", rel)
+
+		file, fileErr := tree.File(rel)
+		if fileErr != nil {
+			return fmt.Errorf("checkout: file %s not found in commit %s: %w", rel, sha[:7], fileErr)
+		}
+
+		contents, readErr := file.Contents()
+		if readErr != nil {
+			return fmt.Errorf("checkout: reading %s from commit %s: %w", rel, sha[:7], readErr)
+		}
+
+		absPath := filepath.Join(g.WorkDir, filepath.FromSlash(rel))
+
+		// Ensure parent directory exists.
+		if mkErr := os.MkdirAll(filepath.Dir(absPath), 0755); mkErr != nil {
+			return fmt.Errorf("checkout: creating parent dir for %s: %w", rel, mkErr)
+		}
+
+		if writeErr := os.WriteFile(absPath, []byte(contents), 0644); writeErr != nil {
+			return fmt.Errorf("checkout: writing %s: %w", rel, writeErr)
+		}
+	}
+
+	return nil
+}
+
 // sshAuth builds the SSH public key auth method from the configured key.
 func (g *GoGitClient) sshAuth() (transport.AuthMethod, error) {
 	if g.SSHKeyPath == "" {

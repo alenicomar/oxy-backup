@@ -15,7 +15,7 @@ func TestManifestRoundTrip(t *testing.T) {
 		{Filename: "part_0003.sql", SizeBytes: 45000},
 	}
 
-	err := WriteManifest(dir, "mydb", "20260318-140000", parts)
+	err := WriteManifest(dir, "mydb", parts)
 	if err != nil {
 		t.Fatalf("WriteManifest() error: %v", err)
 	}
@@ -34,9 +34,6 @@ func TestManifestRoundTrip(t *testing.T) {
 
 	if m.DbName != "mydb" {
 		t.Errorf("DbName = %q, want %q", m.DbName, "mydb")
-	}
-	if m.Timestamp != "20260318-140000" {
-		t.Errorf("Timestamp = %q, want %q", m.Timestamp, "20260318-140000")
 	}
 	if m.PartCount != 3 {
 		t.Errorf("PartCount = %d, want 3", m.PartCount)

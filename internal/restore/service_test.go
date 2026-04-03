@@ -12,6 +12,7 @@ import (
 
 	"github.com/alenicomar/oxy-backup/internal/backup"
 	"github.com/alenicomar/oxy-backup/internal/config"
+	"github.com/alenicomar/oxy-backup/internal/git"
 )
 
 // --- Mocks ---
@@ -59,6 +60,14 @@ func (m *mockGitClient) Init(_ context.Context) error { return nil }
 
 func (m *mockGitClient) RemoteAdd(_ context.Context, _, _ string) error { return nil }
 
+func (m *mockGitClient) Log(_ context.Context, _ string, _ int) ([]git.CommitInfo, error) {
+	return nil, nil
+}
+
+func (m *mockGitClient) CheckoutFiles(_ context.Context, _ string, _ ...string) error {
+	return nil
+}
+
 // --- Helpers ---
 
 func createTestManifest(t *testing.T, dir string, parts []backup.PartitionInfo) {
@@ -66,7 +75,6 @@ func createTestManifest(t *testing.T, dir string, parts []backup.PartitionInfo) 
 
 	m := backup.Manifest{
 		DbName:    "testdb",
-		Timestamp: "20260318-140000",
 		PartCount: len(parts),
 		Parts:     parts,
 	}
