@@ -369,3 +369,205 @@ func TestExecGitClient_RemoteAdd_AlreadyExists(t *testing.T) {
 		t.Fatal("expected error when adding duplicate remote, got nil")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Log tests
+// ---------------------------------------------------------------------------
+
+func TestExecGitClient_Log_ReturnsCommits(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+
+	// Create two commits
+	if err := os.WriteFile(filepath.Join(dir, "file1.txt"), []byte("first"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "file1.txt")
+	gitExec(t, dir, "commit", "-m", "first commit")
+
+	if err := os.WriteFile(filepath.Join(dir, "file2.txt"), []byte("second"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "file2.txt")
+	gitExec(t, dir, "commit", "-m", "second commit")
+
+	client := newClient(dir)
+	commits, err := client.Log(context.Background(), "", 0)
+	if err != nil {
+		t.Fatalf("Log() error: %v", err)
+	}
+
+	if len(commits) != 2 {
+		t.Fatalf("Log() returned %d commits, want 2", len(commits))
+	}
+
+	// Newest first
+	if commits[0].Message != "second commit" {
+		t.Errorf("commits[0].Message = %q, want %q", commits[0].Message, "second commit")
+	}
+	if commits[1].Message != "first commit" {
+		t.Errorf("commits[1].Message = %q, want %q", commits[1].Message, "first commit")
+	}
+
+	// SHA should be 40 chars
+	if len(commits[0].SHA) != 40 {
+		t.Errorf("SHA length = %d, want 40", len(commits[0].SHA))
+	}
+	// ShortSHA should be 7 chars
+	if len(commits[0].ShortSHA) != 7 {
+		t.Errorf("ShortSHA length = %d, want 7", len(commits[0].ShortSHA))
+	}
+	// Date should not be zero
+	if commits[0].Date.IsZero() {
+		t.Error("commits[0].Date is zero, want valid date")
+	}
+}
+
+func TestExecGitClient_Log_WithPathFilter(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+
+	// Create subdirectory with files
+	subDir := filepath.Join(dir, "partitions", "mydb")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := os.WriteFile(filepath.Join(subDir, "part_0001.sql"), []byte("data1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "backup: mydb")
+
+	// Create unrelated commit
+	if err := os.WriteFile(filepath.Join(dir, "readme.txt"), []byte("readme"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "readme.txt")
+	gitExec(t, dir, "commit", "-m", "add readme")
+
+	client := newClient(dir)
+
+	// Filter by partitions/mydb — should only return 1 commit
+	commits, err := client.Log(context.Background(), "partitions/mydb", 0)
+	if err != nil {
+		t.Fatalf("Log() error: %v", err)
+	}
+
+	if len(commits) != 1 {
+		t.Fatalf("Log(path=partitions/mydb) returned %d commits, want 1", len(commits))
+	}
+	if commits[0].Message != "backup: mydb" {
+		t.Errorf("commits[0].Message = %q, want %q", commits[0].Message, "backup: mydb")
+	}
+}
+
+func TestExecGitClient_Log_WithLimit(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+
+	// Create 3 commits
+	for i := 1; i <= 3; i++ {
+		name := filepath.Join(dir, "file"+string(rune('0'+i))+".txt")
+		if err := os.WriteFile(name, []byte("data"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		gitExec(t, dir, "add", ".")
+		gitExec(t, dir, "commit", "-m", "commit "+string(rune('0'+i)))
+	}
+
+	client := newClient(dir)
+	commits, err := client.Log(context.Background(), "", 2)
+	if err != nil {
+		t.Fatalf("Log() error: %v", err)
+	}
+
+	if len(commits) != 2 {
+		t.Fatalf("Log(limit=2) returned %d commits, want 2", len(commits))
+	}
+}
+
+func TestExecGitClient_Log_EmptyRepo(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+
+	client := newClient(dir)
+	commits, err := client.Log(context.Background(), "", 0)
+	if err != nil {
+		t.Fatalf("Log() error: %v", err)
+	}
+
+	if len(commits) != 0 {
+		t.Errorf("Log() on empty repo returned %d commits, want 0", len(commits))
+	}
+}
+
+// ---------------------------------------------------------------------------
+// CheckoutFiles tests
+// ---------------------------------------------------------------------------
+
+func TestExecGitClient_CheckoutFiles_RestoresFromCommit(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+
+	filePath := filepath.Join(dir, "data.txt")
+
+	// Commit v1
+	if err := os.WriteFile(filePath, []byte("version-1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "data.txt")
+	gitExec(t, dir, "commit", "-m", "v1")
+	v1SHA := gitExec(t, dir, "rev-parse", "HEAD")
+
+	// Commit v2 (different content)
+	if err := os.WriteFile(filePath, []byte("version-2"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", "data.txt")
+	gitExec(t, dir, "commit", "-m", "v2")
+
+	// Checkout v1 content
+	client := newClient(dir)
+	if err := client.CheckoutFiles(context.Background(), v1SHA, "data.txt"); err != nil {
+		t.Fatalf("CheckoutFiles() error: %v", err)
+	}
+
+	got, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "version-1" {
+		t.Errorf("file content = %q, want %q", string(got), "version-1")
+	}
+}
+
+func TestExecGitClient_CheckoutFiles_InvalidSHA(t *testing.T) {
+	skipIfNoGit(t)
+
+	dir := t.TempDir()
+	initRepo(t, dir)
+
+	// Create one commit so the repo isn't empty
+	if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	gitExec(t, dir, "add", ".")
+	gitExec(t, dir, "commit", "-m", "initial")
+
+	client := newClient(dir)
+	err := client.CheckoutFiles(context.Background(), "deadbeefdeadbeef", "file.txt")
+	if err == nil {
+		t.Fatal("CheckoutFiles() expected error for invalid SHA, got nil")
+	}
+}

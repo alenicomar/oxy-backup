@@ -197,6 +197,95 @@ databases:
 	}
 }
 
+// --- ExtraPaths validation tests ---
+
+func TestExtraPathsValid(t *testing.T) {
+	yaml := `
+version: "1"
+git:
+  extra_paths:
+    - "docker-compose.yml"
+    - "scripts/backup.sh"
+databases:
+  - name: mydb
+    mode: docker
+    container: pg
+    database: myapp
+    password: "pass"
+`
+	cfg := loadFromString(t, yaml)
+	if len(cfg.Git.ExtraPaths) != 2 {
+		t.Fatalf("extra_paths count = %d, want 2", len(cfg.Git.ExtraPaths))
+	}
+	if cfg.Git.ExtraPaths[0] != "docker-compose.yml" {
+		t.Errorf("extra_paths[0] = %q, want %q", cfg.Git.ExtraPaths[0], "docker-compose.yml")
+	}
+}
+
+func TestExtraPathsEmpty(t *testing.T) {
+	yaml := `
+version: "1"
+databases:
+  - name: mydb
+    mode: docker
+    container: pg
+    database: myapp
+    password: "pass"
+`
+	cfg := loadFromString(t, yaml)
+	if len(cfg.Git.ExtraPaths) != 0 {
+		t.Errorf("extra_paths count = %d, want 0 (nil/empty)", len(cfg.Git.ExtraPaths))
+	}
+}
+
+func TestExtraPathsRejectsEmptyString(t *testing.T) {
+	yaml := `
+version: "1"
+git:
+  extra_paths:
+    - ""
+databases:
+  - name: mydb
+    mode: docker
+    container: pg
+    database: myapp
+    password: "pass"
+`
+	expectLoadError(t, yaml, "must not be empty")
+}
+
+func TestExtraPathsRejectsAbsolutePath(t *testing.T) {
+	yaml := `
+version: "1"
+git:
+  extra_paths:
+    - "/etc/passwd"
+databases:
+  - name: mydb
+    mode: docker
+    container: pg
+    database: myapp
+    password: "pass"
+`
+	expectLoadError(t, yaml, "must be a relative path")
+}
+
+func TestExtraPathsRejectsParentTraversal(t *testing.T) {
+	yaml := `
+version: "1"
+git:
+  extra_paths:
+    - "../secrets.txt"
+databases:
+  - name: mydb
+    mode: docker
+    container: pg
+    database: myapp
+    password: "pass"
+`
+	expectLoadError(t, yaml, "must not contain '..'")
+}
+
 // --- helpers ---
 
 func loadFromString(t *testing.T, yamlContent string) *Config {

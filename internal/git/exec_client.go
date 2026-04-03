@@ -104,6 +104,10 @@ func (g *ExecGitClient) Log(ctx context.Context, path string, limit int) ([]Comm
 
 	out, err := g.run(ctx, args...)
 	if err != nil {
+		// Empty repo (no commits yet) — return empty slice, not error.
+		if strings.Contains(err.Error(), "does not have any commits") {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("git log: %w", err)
 	}
 

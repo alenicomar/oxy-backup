@@ -278,6 +278,10 @@ func (g *GoGitClient) Log(ctx context.Context, path string, limit int) ([]Commit
 
 	iter, err := repo.Log(logOpts)
 	if err != nil {
+		// Empty repo (no commits / HEAD not found) — return empty slice, not error.
+		if err.Error() == "reference not found" {
+			return nil, nil
+		}
 		return nil, fmt.Errorf("git log: %w", err)
 	}
 
