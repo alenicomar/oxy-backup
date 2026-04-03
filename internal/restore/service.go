@@ -13,26 +13,31 @@ import (
 	"github.com/alenicomar/oxy-backup/internal/postgres"
 )
 
-// Service orchestrates the restore flow: validate → assemble → load → cleanup.
+// Service orchestrates the restore flow: checkout → validate → assemble → load → git restore.
 type Service struct {
 	PgExecutor postgres.PgExecutor
 	GitClient  git.GitClient
 	Logger     *slog.Logger
 }
 
-// Run executes the full restore pipeline for a single database and timestamp.
-func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig, timestamp string) error {
-	partDir := filepath.Join(dbCfg.OutputDir, "partitions", dbCfg.Name, timestamp)
+// Run executes the full restore pipeline for a single database at a specific commit.
+// It checks out the backup files from the given commit SHA, reassembles them,
+// loads into PostgreSQL, then restores the working tree to HEAD.
+func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig, commitSHA string) error {
+	partDir := filepath.Join(dbCfg.OutputDir, "partitions", dbCfg.Name)
 
-	// 0. Validate git repo (partitions will be recovered via git restore later)
+	// 1. Validate git repo (required for checkout-based restore)
 	if err := s.GitClient.ValidateRepo(ctx); err != nil {
-		s.Logger.Warn("git repo validation failed — git restore after load will not work",
-			"error", err,
-		)
+		return fmt.Errorf("git validation failed: %w", err)
 	}
 
-	// 1. Load and validate manifest
+	// 2. Checkout backup files from the target commit
 	manifestPath := filepath.Join(partDir, "manifest.json")
+	if err := s.GitClient.CheckoutFiles(ctx, commitSHA, manifestPath); err != nil {
+		return fmt.Errorf("checking out manifest from %s: %w", shortSHA(commitSHA), err)
+	}
+
+	// 3. Load and validate manifest
 	manifest, err := backup.LoadManifest(manifestPath)
 	if err != nil {
 		return fmt.Errorf("loading manifest: %w", err)
@@ -40,21 +45,29 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig, timestam
 
 	s.Logger.Info("restore starting",
 		"database", dbCfg.Name,
-		"timestamp", timestamp,
+		"commit", shortSHA(commitSHA),
 		"partitions", manifest.PartCount,
 	)
 
-	// 2. Validate partition files exist
+	// 4. Checkout all partition files from the target commit
+	partPaths := make([]string, 0, len(manifest.Parts))
+	for _, part := range manifest.Parts {
+		partPaths = append(partPaths, filepath.Join(partDir, part.Filename))
+	}
+	if err := s.GitClient.CheckoutFiles(ctx, commitSHA, partPaths...); err != nil {
+		return fmt.Errorf("checking out partitions from %s: %w", shortSHA(commitSHA), err)
+	}
+
+	// 5. Validate partition files exist on disk
 	if err := s.validatePartitions(partDir, manifest); err != nil {
 		return err
 	}
 
-	// 3. Create destination file and assemble
-	destPath := filepath.Join(partDir, fmt.Sprintf("restore_%s_%s.sql", dbCfg.Name, timestamp))
+	// 6. Create destination file and assemble
+	destPath := filepath.Join(partDir, fmt.Sprintf("restore_%s.sql", dbCfg.Name))
 
 	assembler := &Assembler{Logger: s.Logger}
 	if err := assembler.Reassemble(ctx, manifest, partDir, destPath); err != nil {
-		// Clean up destination file on assembly failure
 		os.Remove(destPath)
 		return fmt.Errorf("assembly failed: %w", err)
 	}
@@ -64,9 +77,8 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig, timestam
 		"destination", destPath,
 	)
 
-	// 4. Load into database via psql --single-transaction
+	// 7. Load into database via psql --single-transaction
 	if err := s.PgExecutor.LoadDatabase(ctx, dbCfg, destPath); err != nil {
-		// Keep destination file for debugging
 		s.Logger.Error("restore load failed — destination file preserved for debugging",
 			"file", destPath,
 			"error", err,
@@ -76,19 +88,15 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig, timestam
 
 	s.Logger.Info("database restored successfully", "database", dbCfg.Name)
 
-	// 5. Delete destination file
+	// 8. Delete destination file
 	if err := os.Remove(destPath); err != nil {
 		s.Logger.Warn("failed to remove destination file", "file", destPath, "error", err)
 	}
 
-	// 6. Git restore all partition files
-	partPaths := make([]string, 0, len(manifest.Parts))
-	for _, part := range manifest.Parts {
-		partPaths = append(partPaths, filepath.Join(partDir, part.Filename))
-	}
-
-	if err := s.GitClient.Restore(ctx, partPaths...); err != nil {
-		s.Logger.Warn("git restore failed — data was loaded successfully, but partition files could not be recovered",
+	// 9. Git restore working tree to HEAD (undo the checkout)
+	allPaths := append([]string{manifestPath}, partPaths...)
+	if err := s.GitClient.Restore(ctx, allPaths...); err != nil {
+		s.Logger.Warn("git restore failed — data was loaded successfully, but working tree not restored to HEAD",
 			"error", err,
 		)
 		// Non-fatal: the data is loaded, git restore is best-effort
@@ -96,7 +104,7 @@ func (s *Service) Run(ctx context.Context, dbCfg config.DatabaseConfig, timestam
 
 	s.Logger.Info("restore completed successfully",
 		"database", dbCfg.Name,
-		"timestamp", timestamp,
+		"commit", shortSHA(commitSHA),
 	)
 
 	return nil
@@ -121,27 +129,21 @@ func (s *Service) validatePartitions(partDir string, manifest *backup.Manifest) 
 	return nil
 }
 
-// ListTimestamps returns available backup timestamps for a database.
-func ListTimestamps(dbCfg config.DatabaseConfig) ([]string, error) {
-	partBaseDir := filepath.Join(dbCfg.OutputDir, "partitions", dbCfg.Name)
-	entries, err := os.ReadDir(partBaseDir)
+// ListBackups returns commit history for a database's backup directory.
+// Each entry represents a point-in-time backup that can be restored.
+func ListBackups(ctx context.Context, gitClient git.GitClient, dbCfg config.DatabaseConfig, limit int) ([]git.CommitInfo, error) {
+	path := filepath.Join("partitions", dbCfg.Name)
+	commits, err := gitClient.Log(ctx, path, limit)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("listing backup timestamps: %w", err)
+		return nil, fmt.Errorf("listing backups for %s: %w", dbCfg.Name, err)
 	}
+	return commits, nil
+}
 
-	var timestamps []string
-	for _, entry := range entries {
-		if entry.IsDir() {
-			// Verify it has a manifest.json
-			manifestPath := filepath.Join(partBaseDir, entry.Name(), "manifest.json")
-			if _, err := os.Stat(manifestPath); err == nil {
-				timestamps = append(timestamps, entry.Name())
-			}
-		}
+// shortSHA returns the first 7 characters of a SHA, or the full string if shorter.
+func shortSHA(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
 	}
-
-	return timestamps, nil
+	return sha
 }

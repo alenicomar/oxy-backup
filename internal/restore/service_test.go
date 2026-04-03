@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/alenicomar/oxy-backup/internal/backup"
 	"github.com/alenicomar/oxy-backup/internal/config"
@@ -34,10 +35,19 @@ func (m *mockPgExecutor) LoadDatabase(_ context.Context, _ config.DatabaseConfig
 }
 
 type mockGitClient struct {
-	validateRepoErr error
-	restoreCalled   bool
-	restorePaths    []string
-	restoreErr      error
+	validateRepoErr    error
+	restoreCalled      bool
+	restorePaths       []string
+	restoreErr         error
+	checkoutFilesCalls []checkoutFilesCall
+	checkoutFilesErr   error
+	logResult          []git.CommitInfo
+	logErr             error
+}
+
+type checkoutFilesCall struct {
+	SHA   string
+	Paths []string
 }
 
 func (m *mockGitClient) ValidateRepo(_ context.Context) error {
@@ -61,11 +71,14 @@ func (m *mockGitClient) Init(_ context.Context) error { return nil }
 func (m *mockGitClient) RemoteAdd(_ context.Context, _, _ string) error { return nil }
 
 func (m *mockGitClient) Log(_ context.Context, _ string, _ int) ([]git.CommitInfo, error) {
-	return nil, nil
+	return m.logResult, m.logErr
 }
 
-func (m *mockGitClient) CheckoutFiles(_ context.Context, _ string, _ ...string) error {
-	return nil
+// CheckoutFiles simulates checking out files by creating them on disk
+// if the mock doesn't have an error set.
+func (m *mockGitClient) CheckoutFiles(_ context.Context, sha string, paths ...string) error {
+	m.checkoutFilesCalls = append(m.checkoutFilesCalls, checkoutFilesCall{SHA: sha, Paths: paths})
+	return m.checkoutFilesErr
 }
 
 // --- Helpers ---
@@ -97,41 +110,41 @@ func createTestPartition(t *testing.T, dir, filename, content string) {
 	}
 }
 
-// setupPartDir creates the full partition directory structure under a temp dir
-// and returns the temp root (used as OutputDir) plus the partition dir path.
-func setupPartDir(t *testing.T, dbName, timestamp string) (outputDir, partDir string) {
+// setupPartDir creates the fixed partition directory structure under a temp dir.
+func setupPartDir(t *testing.T, dbName string) (outputDir, partDir string) {
 	t.Helper()
 
 	outputDir = t.TempDir()
-	partDir = filepath.Join(outputDir, "partitions", dbName, timestamp)
+	partDir = filepath.Join(outputDir, "partitions", dbName)
 	if err := os.MkdirAll(partDir, 0755); err != nil {
 		t.Fatalf("creating partition dir: %v", err)
 	}
 	return outputDir, partDir
 }
 
-func newTestService(pg *mockPgExecutor, git *mockGitClient) *Service {
+func newTestService(pg *mockPgExecutor, gitClient *mockGitClient) *Service {
 	return &Service{
 		PgExecutor: pg,
-		GitClient:  git,
+		GitClient:  gitClient,
 		Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 	}
 }
 
 // --- Service.Run tests ---
 
-func TestServiceRunSuccess(t *testing.T) {
-	const (
-		dbName    = "testdb"
-		timestamp = "20260318-140000"
-	)
+const testSHA = "abc1234567890def1234567890abcdef12345678"
 
-	outputDir, partDir := setupPartDir(t, dbName, timestamp)
+func TestServiceRunSuccess(t *testing.T) {
+	const dbName = "testdb"
+
+	outputDir, partDir := setupPartDir(t, dbName)
 
 	parts := []backup.PartitionInfo{
 		{Filename: "part_0001.sql", SizeBytes: 19},
 		{Filename: "part_0002.sql", SizeBytes: 29},
 	}
+
+	// Pre-create files on disk (simulating what CheckoutFiles would do)
 	createTestManifest(t, partDir, parts)
 	createTestPartition(t, partDir, "part_0001.sql", "CREATE TABLE test;\n")
 	createTestPartition(t, partDir, "part_0002.sql", "INSERT INTO test VALUES (1);\n")
@@ -145,9 +158,27 @@ func TestServiceRunSuccess(t *testing.T) {
 		OutputDir: outputDir,
 	}
 
-	err := svc.Run(context.Background(), dbCfg, timestamp)
+	err := svc.Run(context.Background(), dbCfg, testSHA)
 	if err != nil {
 		t.Fatalf("Run() error: %v", err)
+	}
+
+	// CheckoutFiles should have been called (manifest + partitions)
+	if len(gitMock.checkoutFilesCalls) != 2 {
+		t.Fatalf("CheckoutFiles called %d times, want 2", len(gitMock.checkoutFilesCalls))
+	}
+
+	// First call: manifest only
+	if gitMock.checkoutFilesCalls[0].SHA != testSHA {
+		t.Errorf("first CheckoutFiles SHA = %q, want %q", gitMock.checkoutFilesCalls[0].SHA, testSHA)
+	}
+	if len(gitMock.checkoutFilesCalls[0].Paths) != 1 {
+		t.Errorf("first CheckoutFiles paths count = %d, want 1 (manifest)", len(gitMock.checkoutFilesCalls[0].Paths))
+	}
+
+	// Second call: partition files
+	if len(gitMock.checkoutFilesCalls[1].Paths) != 2 {
+		t.Errorf("second CheckoutFiles paths count = %d, want 2 (partitions)", len(gitMock.checkoutFilesCalls[1].Paths))
 	}
 
 	// LoadDatabase should have been called
@@ -156,41 +187,32 @@ func TestServiceRunSuccess(t *testing.T) {
 	}
 
 	// Destination file should be removed after successful load
-	destPath := filepath.Join(partDir, "restore_"+dbName+"_"+timestamp+".sql")
+	destPath := filepath.Join(partDir, "restore_"+dbName+".sql")
 	if _, err := os.Stat(destPath); !os.IsNotExist(err) {
 		t.Errorf("destination file %s should be removed after success", destPath)
 	}
 
-	// Git restore should have been called with the correct partition paths
+	// Git restore should have been called to reset working tree to HEAD
 	if !gitMock.restoreCalled {
 		t.Error("GitClient.Restore was not called")
 	}
 
-	expectedPaths := []string{
-		filepath.Join(partDir, "part_0001.sql"),
-		filepath.Join(partDir, "part_0002.sql"),
-	}
-	if len(gitMock.restorePaths) != len(expectedPaths) {
-		t.Fatalf("Restore paths count = %d, want %d", len(gitMock.restorePaths), len(expectedPaths))
-	}
-	for i, got := range gitMock.restorePaths {
-		if got != expectedPaths[i] {
-			t.Errorf("Restore path[%d] = %q, want %q", i, got, expectedPaths[i])
-		}
+	// Restore should include manifest + all partition paths
+	expectedRestoreCount := 1 + len(parts) // manifest + partitions
+	if len(gitMock.restorePaths) != expectedRestoreCount {
+		t.Fatalf("Restore paths count = %d, want %d", len(gitMock.restorePaths), expectedRestoreCount)
 	}
 }
 
-func TestServiceRunMissingManifest(t *testing.T) {
-	const (
-		dbName    = "testdb"
-		timestamp = "20260318-140000"
-	)
+func TestServiceRunCheckoutManifestFailure(t *testing.T) {
+	const dbName = "testdb"
 
-	outputDir, _ := setupPartDir(t, dbName, timestamp)
-	// No manifest.json created
+	outputDir, _ := setupPartDir(t, dbName)
 
 	pg := &mockPgExecutor{}
-	gitMock := &mockGitClient{}
+	gitMock := &mockGitClient{
+		checkoutFilesErr: errors.New("commit not found"),
+	}
 	svc := newTestService(pg, gitMock)
 
 	dbCfg := config.DatabaseConfig{
@@ -198,27 +220,54 @@ func TestServiceRunMissingManifest(t *testing.T) {
 		OutputDir: outputDir,
 	}
 
-	err := svc.Run(context.Background(), dbCfg, timestamp)
+	err := svc.Run(context.Background(), dbCfg, testSHA)
 	if err == nil {
-		t.Fatal("Run() expected error when manifest is missing")
+		t.Fatal("Run() expected error when CheckoutFiles fails")
 	}
 
-	if got := err.Error(); !contains(got, "loading manifest") {
-		t.Errorf("error = %q, want substring %q", got, "loading manifest")
+	if !contains(err.Error(), "checking out manifest") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "checking out manifest")
 	}
 
 	if pg.loadCalled {
-		t.Error("LoadDatabase should not be called when manifest is missing")
+		t.Error("LoadDatabase should not be called when checkout fails")
+	}
+}
+
+func TestServiceRunGitValidateFailure(t *testing.T) {
+	const dbName = "testdb"
+
+	outputDir, _ := setupPartDir(t, dbName)
+
+	pg := &mockPgExecutor{}
+	gitMock := &mockGitClient{
+		validateRepoErr: errors.New("not a git repository"),
+	}
+	svc := newTestService(pg, gitMock)
+
+	dbCfg := config.DatabaseConfig{
+		Name:      dbName,
+		OutputDir: outputDir,
+	}
+
+	err := svc.Run(context.Background(), dbCfg, testSHA)
+	if err == nil {
+		t.Fatal("Run() expected error when git validation fails")
+	}
+
+	if !contains(err.Error(), "git validation failed") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "git validation failed")
+	}
+
+	if pg.loadCalled {
+		t.Error("LoadDatabase should not be called when git validation fails")
 	}
 }
 
 func TestServiceRunPartitionCountMismatch(t *testing.T) {
-	const (
-		dbName    = "testdb"
-		timestamp = "20260318-140000"
-	)
+	const dbName = "testdb"
 
-	outputDir, partDir := setupPartDir(t, dbName, timestamp)
+	outputDir, partDir := setupPartDir(t, dbName)
 
 	// Manifest declares 3 parts but we only create 1 file
 	parts := []backup.PartitionInfo{
@@ -239,13 +288,13 @@ func TestServiceRunPartitionCountMismatch(t *testing.T) {
 		OutputDir: outputDir,
 	}
 
-	err := svc.Run(context.Background(), dbCfg, timestamp)
+	err := svc.Run(context.Background(), dbCfg, testSHA)
 	if err == nil {
 		t.Fatal("Run() expected error for partition count mismatch")
 	}
 
-	if got := err.Error(); !contains(got, "partition count mismatch") {
-		t.Errorf("error = %q, want substring %q", got, "partition count mismatch")
+	if !contains(err.Error(), "partition count mismatch") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "partition count mismatch")
 	}
 
 	if pg.loadCalled {
@@ -254,12 +303,9 @@ func TestServiceRunPartitionCountMismatch(t *testing.T) {
 }
 
 func TestServiceRunLoadDatabaseFailure(t *testing.T) {
-	const (
-		dbName    = "testdb"
-		timestamp = "20260318-140000"
-	)
+	const dbName = "testdb"
 
-	outputDir, partDir := setupPartDir(t, dbName, timestamp)
+	outputDir, partDir := setupPartDir(t, dbName)
 
 	parts := []backup.PartitionInfo{
 		{Filename: "part_0001.sql", SizeBytes: 19},
@@ -276,34 +322,31 @@ func TestServiceRunLoadDatabaseFailure(t *testing.T) {
 		OutputDir: outputDir,
 	}
 
-	err := svc.Run(context.Background(), dbCfg, timestamp)
+	err := svc.Run(context.Background(), dbCfg, testSHA)
 	if err == nil {
 		t.Fatal("Run() expected error when LoadDatabase fails")
 	}
 
-	if got := err.Error(); !contains(got, "database load failed") {
-		t.Errorf("error = %q, want substring %q", got, "database load failed")
+	if !contains(err.Error(), "database load failed") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "database load failed")
 	}
 
 	// Destination file should be PRESERVED for debugging
-	destPath := filepath.Join(partDir, "restore_"+dbName+"_"+timestamp+".sql")
+	destPath := filepath.Join(partDir, "restore_"+dbName+".sql")
 	if _, err := os.Stat(destPath); os.IsNotExist(err) {
 		t.Error("destination file should be preserved after LoadDatabase failure")
 	}
 
-	// Git restore should NOT have been called
+	// Git restore should NOT have been called (failed before cleanup step)
 	if gitMock.restoreCalled {
 		t.Error("GitClient.Restore should not be called when LoadDatabase fails")
 	}
 }
 
 func TestServiceRunGitRestoreFailureNonFatal(t *testing.T) {
-	const (
-		dbName    = "testdb"
-		timestamp = "20260318-140000"
-	)
+	const dbName = "testdb"
 
-	outputDir, partDir := setupPartDir(t, dbName, timestamp)
+	outputDir, partDir := setupPartDir(t, dbName)
 
 	parts := []backup.PartitionInfo{
 		{Filename: "part_0001.sql", SizeBytes: 19},
@@ -312,7 +355,7 @@ func TestServiceRunGitRestoreFailureNonFatal(t *testing.T) {
 	createTestPartition(t, partDir, "part_0001.sql", "CREATE TABLE test;\n")
 
 	pg := &mockPgExecutor{}
-	gitMock := &mockGitClient{restoreErr: errors.New("not a git repository")}
+	gitMock := &mockGitClient{restoreErr: errors.New("git restore failed")}
 	svc := newTestService(pg, gitMock)
 
 	dbCfg := config.DatabaseConfig{
@@ -320,7 +363,7 @@ func TestServiceRunGitRestoreFailureNonFatal(t *testing.T) {
 		OutputDir: outputDir,
 	}
 
-	err := svc.Run(context.Background(), dbCfg, timestamp)
+	err := svc.Run(context.Background(), dbCfg, testSHA)
 	if err != nil {
 		t.Fatalf("Run() returned error %v, want nil (git restore failure should be non-fatal)", err)
 	}
@@ -330,150 +373,98 @@ func TestServiceRunGitRestoreFailureNonFatal(t *testing.T) {
 	}
 }
 
-func TestServiceRunGitValidateFailureNonFatal(t *testing.T) {
-	const (
-		dbName    = "testdb"
-		timestamp = "20260318-140000"
-	)
+// --- ListBackups tests ---
 
-	outputDir, partDir := setupPartDir(t, dbName, timestamp)
+func TestListBackupsSuccess(t *testing.T) {
+	now := time.Now().UTC()
 
-	parts := []backup.PartitionInfo{
-		{Filename: "part_0001.sql", SizeBytes: 19},
+	gitMock := &mockGitClient{
+		logResult: []git.CommitInfo{
+			{SHA: "abc1234567890", ShortSHA: "abc1234", Date: now, Message: "backup: testdb @ 20260318-140000"},
+			{SHA: "def5678901234", ShortSHA: "def5678", Date: now.Add(-24 * time.Hour), Message: "backup: testdb @ 20260317-140000"},
+		},
 	}
-	createTestManifest(t, partDir, parts)
-	createTestPartition(t, partDir, "part_0001.sql", "CREATE TABLE test;\n")
-
-	pg := &mockPgExecutor{}
-	gitMock := &mockGitClient{validateRepoErr: errors.New("not a git repository")}
-	svc := newTestService(pg, gitMock)
 
 	dbCfg := config.DatabaseConfig{
-		Name:      dbName,
-		OutputDir: outputDir,
+		Name:      "testdb",
+		OutputDir: "/tmp/test",
 	}
 
-	err := svc.Run(context.Background(), dbCfg, timestamp)
+	commits, err := ListBackups(context.Background(), gitMock, dbCfg, 10)
 	if err != nil {
-		t.Fatalf("Run() returned error %v, want nil (git validate failure should be non-fatal)", err)
+		t.Fatalf("ListBackups() error: %v", err)
 	}
 
-	// Load should still have happened
-	if !pg.loadCalled {
-		t.Error("LoadDatabase should be called even when ValidateRepo fails")
+	if len(commits) != 2 {
+		t.Fatalf("ListBackups() returned %d commits, want 2", len(commits))
+	}
+
+	if commits[0].ShortSHA != "abc1234" {
+		t.Errorf("commits[0].ShortSHA = %q, want %q", commits[0].ShortSHA, "abc1234")
+	}
+	if commits[1].ShortSHA != "def5678" {
+		t.Errorf("commits[1].ShortSHA = %q, want %q", commits[1].ShortSHA, "def5678")
 	}
 }
 
-// --- ListTimestamps tests ---
+func TestListBackupsEmpty(t *testing.T) {
+	gitMock := &mockGitClient{
+		logResult: nil,
+	}
 
-func TestListTimestampsMultipleDirs(t *testing.T) {
-	const dbName = "testdb"
+	dbCfg := config.DatabaseConfig{
+		Name:      "testdb",
+		OutputDir: "/tmp/test",
+	}
 
-	outputDir := t.TempDir()
-	baseDir := filepath.Join(outputDir, "partitions", dbName)
+	commits, err := ListBackups(context.Background(), gitMock, dbCfg, 0)
+	if err != nil {
+		t.Fatalf("ListBackups() error: %v", err)
+	}
 
-	// Create 3 timestamp dirs, each with a manifest.json
-	expected := []string{"20260318-100000", "20260318-120000", "20260318-140000"}
-	for _, ts := range expected {
-		dir := filepath.Join(baseDir, ts)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			t.Fatalf("creating dir: %v", err)
+	if len(commits) != 0 {
+		t.Errorf("ListBackups() = %v, want empty slice", commits)
+	}
+}
+
+func TestListBackupsError(t *testing.T) {
+	gitMock := &mockGitClient{
+		logErr: errors.New("not a git repository"),
+	}
+
+	dbCfg := config.DatabaseConfig{
+		Name:      "testdb",
+		OutputDir: "/tmp/test",
+	}
+
+	_, err := ListBackups(context.Background(), gitMock, dbCfg, 0)
+	if err == nil {
+		t.Fatal("ListBackups() expected error")
+	}
+
+	if !contains(err.Error(), "listing backups") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "listing backups")
+	}
+}
+
+// --- shortSHA tests ---
+
+func TestShortSHA(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"abc1234567890def1234567890abcdef12345678", "abc1234"},
+		{"abc1234", "abc1234"},
+		{"abc", "abc"},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		got := shortSHA(tt.input)
+		if got != tt.want {
+			t.Errorf("shortSHA(%q) = %q, want %q", tt.input, got, tt.want)
 		}
-		createTestManifest(t, dir, []backup.PartitionInfo{
-			{Filename: "part_0001.sql", SizeBytes: 10},
-		})
-	}
-
-	dbCfg := config.DatabaseConfig{
-		Name:      dbName,
-		OutputDir: outputDir,
-	}
-
-	timestamps, err := ListTimestamps(dbCfg)
-	if err != nil {
-		t.Fatalf("ListTimestamps() error: %v", err)
-	}
-
-	if len(timestamps) != len(expected) {
-		t.Fatalf("ListTimestamps() returned %d timestamps, want %d", len(timestamps), len(expected))
-	}
-
-	// os.ReadDir returns sorted entries, so the order should match
-	for i, got := range timestamps {
-		if got != expected[i] {
-			t.Errorf("timestamp[%d] = %q, want %q", i, got, expected[i])
-		}
-	}
-}
-
-func TestListTimestampsEmptyDir(t *testing.T) {
-	const dbName = "testdb"
-
-	outputDir := t.TempDir()
-	baseDir := filepath.Join(outputDir, "partitions", dbName)
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
-		t.Fatalf("creating dir: %v", err)
-	}
-
-	dbCfg := config.DatabaseConfig{
-		Name:      dbName,
-		OutputDir: outputDir,
-	}
-
-	timestamps, err := ListTimestamps(dbCfg)
-	if err != nil {
-		t.Fatalf("ListTimestamps() error: %v", err)
-	}
-
-	if len(timestamps) != 0 {
-		t.Errorf("ListTimestamps() = %v, want empty/nil slice", timestamps)
-	}
-}
-
-func TestListTimestampsNonExistentDir(t *testing.T) {
-	dbCfg := config.DatabaseConfig{
-		Name:      "nope",
-		OutputDir: filepath.Join(t.TempDir(), "does-not-exist"),
-	}
-
-	timestamps, err := ListTimestamps(dbCfg)
-	if err != nil {
-		t.Fatalf("ListTimestamps() error: %v, want nil for non-existent dir", err)
-	}
-
-	if timestamps != nil {
-		t.Errorf("ListTimestamps() = %v, want nil", timestamps)
-	}
-}
-
-func TestListTimestampsDirsWithoutManifest(t *testing.T) {
-	const dbName = "testdb"
-
-	outputDir := t.TempDir()
-	baseDir := filepath.Join(outputDir, "partitions", dbName)
-
-	// Create dirs but no manifest.json inside them
-	for _, ts := range []string{"20260318-100000", "20260318-120000"} {
-		dir := filepath.Join(baseDir, ts)
-		if err := os.MkdirAll(dir, 0755); err != nil {
-			t.Fatalf("creating dir: %v", err)
-		}
-		// Write a random file, NOT manifest.json
-		createTestPartition(t, dir, "part_0001.sql", "data")
-	}
-
-	dbCfg := config.DatabaseConfig{
-		Name:      dbName,
-		OutputDir: outputDir,
-	}
-
-	timestamps, err := ListTimestamps(dbCfg)
-	if err != nil {
-		t.Fatalf("ListTimestamps() error: %v", err)
-	}
-
-	if len(timestamps) != 0 {
-		t.Errorf("ListTimestamps() = %v, want empty/nil slice for dirs without manifest", timestamps)
 	}
 }
 
